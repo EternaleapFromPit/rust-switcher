@@ -1,116 +1,119 @@
-# Rust Switcher – Specification
+# Rust Switcher - Specification
 
 ## Purpose
 
-**Rust Switcher** is a small background utility for **Windows 11** that performs an explicit, user-triggered keyboard layout conversion.
+Rust Switcher is a small background utility for Windows 11 that performs explicit, user triggered keyboard layout conversion.
 
-The application **does not automatically fix input**.
-It executes a user command (**DoubleShift**) to:
+The application does not try to automatically fix input. All actions are executed only by user commands.
 
-* convert already typed text
-* switch the system keyboard layout
-* continue typing in the new layout
+Supported actions:
+- Convert last word: convert the last word to the left of the caret
+- Convert selection: convert the currently selected text
+- Switch keyboard layout: switch the system layout only, without converting text
+- Pause: temporarily disable all hotkey handling
 
 ---
 
 ## Target Platform and Scope
 
-* OS: **Windows 11**
-* Works in regular windowed applications:
-
-  * browsers
-  * IDEs
-  * messengers
-* Not required to work in:
-
-  * fullscreen applications
-  * games
-  * borderless fullscreen windows
+- OS: Windows 11
+- Works in regular windowed applications:
+  - browsers
+  - IDEs
+  - messengers
+- Not required to work in:
+  - fullscreen applications
+  - games
+  - borderless fullscreen windows
 
 ---
 
-## Single Hotkey
+## Hotkeys
 
-### DoubleShift
+The application uses a set of hotkeys configurable via the GUI.
 
-Definition:
+### Actions
 
-* Two consecutive Shift presses (keydown + keyup)
-* **No other keys** may be pressed between them
-* If any of the following are involved, it **does not trigger**:
+1) Convert last word
+- If there is a selection, behaves like Convert selection
+- If there is no selection, selects the last word to the left of the caret and converts it
 
-  * Ctrl
-  * Alt
-  * Win
-  * any other key
-* `Shift + Alt + Shift` is **not** DoubleShift
+2) Convert selection
+- Requires a non empty selection, otherwise does nothing
 
-Timing:
+3) Switch keyboard layout
+- Always switches the system keyboard layout to the next layout
+- Does not modify any text
 
-* Fixed default timeout
-* Optionally configurable via GUI (slider)
+4) Pause
+- Toggles pause state on or off
+- When paused, other hotkeys do nothing
 
----
+### Default Hotkeys
 
-## DoubleShift Behavior
-
-### Case 1: Text is selected
-
-1. Send `Ctrl+C`
-2. Read text from the **system clipboard**
-3. Switch system keyboard layout to the **next layout**
-4. Convert text according to the new layout
-5. Send `Ctrl+V`
-6. Restore original clipboard contents
-
----
-
-### Case 2: No selection
-
-1. Select the last word to the left of the cursor
-
-   * stop at whitespace or start of line
-2. Apply the same flow as in **Case 1**
+Defaults match the reference UI:
+- Convert last word: Pause
+- Convert selection: Ctrl + Break (sometimes shown as Control + Cancel)
+- Switch keyboard layout: None
+- Pause: None
 
 Notes:
+- On assignment, if the hotkey is unavailable or conflicts, the action must not become active and the previous value remains.
+- The application does not override Alt + Shift or Win + Space and relies on standard Windows layout switching.
 
-* Uses **system clipboard**
-* Clipboard is always backed up and restored
-* No per-character backspace logic
+---
+
+## Execution Delay
+
+Setting: Delay before switching (ms)
+- A delay before running the copy, switch layout, paste sequence
+- Needed for stability in apps with slow selection or clipboard updates
+- Configured as an integer in milliseconds
+- Default value: 100 ms
 
 ---
 
 ## Text Conversion
 
-* Simple character mapping based on keyboard layout
-* No language detection
-* No heuristics
-* No “correct” layout guessing
+- Simple character mapping based on keyboard layouts
+- No language detection
+- No heuristics
+- No guessing of the correct layout
 
 Logic:
-
-* take existing text
-* switch system layout
-* transform characters
-* insert result
+- take the existing text
+- switch the system layout
+- transform characters according to the new layout
+- insert the result
 
 Supports:
-
-* any number of layouts
-* layout cycling via system round-robin
+- any number of layouts
+- layout cycling via the system round robin
 
 ---
 
-## System Keyboard Layout
+## Action Flows
 
-* Layout **is always switched** on each DoubleShift
-* Switches to the **next system layout**
-* The new layout remains active for further typing
+### Convert selection
 
-The application:
+1) Send Ctrl + C
+2) Read text from the system clipboard
+3) Wait Delay before switching
+4) Switch system keyboard layout to the next layout
+5) Convert the text according to the new layout
+6) Send Ctrl + V
+7) Restore original clipboard contents
 
-* does **not** override Alt+Shift or Win+Space
-* relies on standard Windows layout switching
+Requirements:
+- Clipboard is always backed up and restored
+- No per character backspace logic
+
+### Convert last word
+
+If there is no selection:
+1) Select the last word to the left of the caret
+   - stop at whitespace or start of line
+2) Then run the same flow as Convert selection
 
 ---
 
@@ -118,83 +121,115 @@ The application:
 
 ### Tray Icon
 
-* Always present while the application is running
+Setting: Show tray icon
+- If enabled, the tray icon is always present while the application is running
+- If disabled, there is no tray icon, and the GUI can only be opened from the window
 
-Right click:
+Tray context menu:
+- Pause or Resume
+- Exit
 
-* Pause / Resume
-* Exit
+Tray click:
+- Show or hide GUI
 
-Left click:
+### GUI
 
-* Show / hide GUI
+The settings window is minimal and matches the reference layout.
 
----
+Left side:
+- Checkbox: Start on windows startup
+- Checkbox: Show tray icon
+- Input: Delay before switching (ms)
+- Button: Report an issue
+- Button: Exit program
 
-### GUI (Minimal)
+Right side, Hotkeys group:
+- Read only display fields showing current hotkeys:
+  - Convert last word
+  - Pause
+  - Convert selection
+  - Switch keyboard layout
+- Must support the value None
 
-* DoubleShift timeout (slider)
-* Autostart (checkbox)
-* Pause / Resume toggle
+Bottom buttons:
+- Apply
+  - atomically writes the config and applies settings
+- Cancel
+  - discards UI changes and restores values from the current config
 
-No additional settings.
+### Report an issue
+
+- Opens the project issues page using the system shell
+- The application itself does not send any data and has no telemetry
 
 ---
 
 ## Autostart
 
-* Portable application model
-* When enabled:
+Portable application model.
 
-  * executable is copied to `%APPDATA%\RustSwitcher\`
-  * `config.json` is stored there
-  * autostart points to that executable
+When Start on windows startup is enabled:
+- the executable is copied to `%APPDATA%\RustSwitcher\`
+- `config.json` is stored there
+- autostart points to that copied executable
+
+When disabled:
+- the autostart entry is removed
+- files under `%APPDATA%\RustSwitcher\` are not removed automatically
 
 ---
 
 ## Configuration
 
-* `%APPDATA%\RustSwitcher\config.json`
-* JSON format
-* Atomic writes
+- Path: `%APPDATA%\RustSwitcher\config.json`
+- Format: JSON
+- Atomic writes (write to temp then rename)
+- Settings:
+  - start_on_startup: bool
+  - show_tray_icon: bool
+  - delay_ms: u32
+  - hotkey_convert_last_word: Hotkey or None
+  - hotkey_convert_selection: Hotkey or None
+  - hotkey_switch_layout: Hotkey or None
+  - hotkey_pause: Hotkey or None
+  - paused: bool
 
 ---
 
 ## Logging and Networking
 
-* Release builds:
-
-  * no logs
-  * no networking
-  * no telemetry
-* Debug builds:
-
-  * optional debug logging
+- Release builds:
+  - no logs
+  - no networking
+  - no telemetry
+- Debug builds:
+  - optional debug logging
 
 ---
 
 ## Stability and Safety
 
-* Single instance only
-* Self-generated input events are ignored
-* If any modifier is pressed, DoubleShift does not trigger
+- Single instance only
+- Self generated input events are ignored
+- When paused, no hotkeys except Pause are executed
+- Clipboard is always restored even on errors (best effort)
 
 ---
 
 ## Out of Scope
 
-* AI features
-* API-based translation
-* smart language detection
-* multiple hotkeys
-* macOS / Linux (for now)
+- AI features
+- API based translation
+- smart language detection
+- macOS or Linux (for now)
 
 ---
 
 ## Definition of Done
 
-* DoubleShift reliably works in browsers and IDEs
-* Selection and last-word cases both work
-* System layout actually switches
-* Tray and autostart work
-* No unnecessary behavior
+- Convert last word works reliably in browsers and IDEs
+- Convert selection works reliably in browsers and IDEs
+- Switch keyboard layout actually switches the system layout
+- Tray, pause or resume, and autostart work
+- GUI matches the spec, Apply or Cancel works correctly
+- No unnecessary behavior
