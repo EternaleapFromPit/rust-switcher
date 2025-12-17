@@ -11,7 +11,7 @@ use crate::helpers;
 use crate::ui;
 use crate::visuals;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{DeleteObject, HFONT, HGDIOBJ};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED};
@@ -20,8 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetMessageW, GetSystemMetrics,
     GetWindowLongPtrW, HICON, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_SHARED, LoadImageW, MSG,
     PostQuitMessage, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SW_SHOW, SendMessageW,
-    SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_COMMAND, WM_CREATE,
-    WM_DESTROY, WM_SETICON, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
+    SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND,
+    WM_CREATE, WM_DESTROY, WM_SETICON, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -48,7 +48,7 @@ fn register_main_class(
     Ok(())
 }
 
-fn compute_window_size(style: windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE) -> (i32, i32) {
+fn compute_window_size(style: WINDOW_STYLE) -> (i32, i32) {
     const CLIENT_W: i32 = 540;
     const CLIENT_H: i32 = 230;
 
@@ -95,7 +95,7 @@ fn create_main_window(
     }
 }
 
-fn set_window_icons(hwnd: HWND, hinstance: windows::Win32::Foundation::HINSTANCE) {
+fn set_window_icons(hwnd: HWND, hinstance: HINSTANCE) {
     unsafe {
         let big = LoadImageW(
             Some(hinstance),
