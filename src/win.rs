@@ -231,6 +231,28 @@ fn apply_config_to_ui(state: &AppState, cfg: &config::Config) {
     }
 }
 
+fn read_ui_to_config(state: &AppState, mut cfg: config::Config) -> config::Config {
+    unsafe {
+        cfg.start_on_startup = helpers::get_checkbox(state.checkboxes.autostart);
+        cfg.show_tray_icon = helpers::get_checkbox(state.checkboxes.tray);
+        cfg.delay_ms = helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(cfg.delay_ms);
+    }
+
+    // paused сейчас в UI не редактируется, оставляем как есть в cfg
+    cfg
+}
+
+fn apply_config_runtime(hwnd: HWND, state: &mut AppState, cfg: &config::Config) {
+    // Синхронизируем рантайм флаг
+    state.paused = cfg.paused;
+
+    // Перерегистрируем хоткеи
+    let _ = crate::hotkeys::register_from_config(hwnd, cfg);
+
+    // TODO: включить или выключить трей
+    // TODO: включить или выключить автозапуск
+}
+
 fn init_font_and_visuals(hwnd: HWND, state: &mut AppState) {
     unsafe {
         match visuals::create_message_font() {
@@ -332,16 +354,28 @@ fn on_command(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
         ControlId::Exit => unsafe {
             let _ = DestroyWindow(hwnd);
         },
+
         ControlId::Apply => {
-            // TODO
-        }
-        ControlId::Cancel => {
-            let _ = with_state_mut(hwnd, |state| {
-                if let Ok(cfg) = config::load() {
+            with_state_mut(hwnd, |state| {
+                let base = config::load().unwrap_or_default();
+                let cfg = read_ui_to_config(state, base);
+
+                if config::save(&cfg).is_ok() {
+                    apply_config_runtime(hwnd, state, &cfg);
                     apply_config_to_ui(state, &cfg);
                 }
             });
         }
+
+        ControlId::Cancel => {
+            with_state_mut(hwnd, |state| {
+                if let Ok(cfg) = config::load() {
+                    apply_config_runtime(hwnd, state, &cfg);
+                    apply_config_to_ui(state, &cfg);
+                }
+            });
+        }
+
         _ => {}
     }
 
