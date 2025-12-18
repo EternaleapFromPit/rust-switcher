@@ -11,9 +11,16 @@ use crate::helpers;
 use crate::ui;
 use crate::visuals;
 
+use crate::app::ControlId;
+
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{DeleteObject, HFONT, HGDIOBJ};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOD_ALT;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOD_CONTROL;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOD_SHIFT;
+use windows::Win32::UI::Input::KeyboardAndMouse::MOD_WIN;
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CANCEL, VK_PAUSE};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, BN_CLICKED, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW,
     DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetMessageW, GetSystemMetrics,
@@ -159,40 +166,43 @@ fn message_loop() -> Result<()> {
     Ok(())
 }
 
-fn format_hotkey(hk: &Option<config::Hotkey>) -> String {
+fn format_hotkey(hk: Option<config::Hotkey>) -> String {
     let Some(hk) = hk else {
         return "None".to_string();
     };
 
-    let mut parts: Vec<String> = Vec::new();
+    const MODS: &[(u32, &str)] = &[
+        (MOD_CONTROL.0, "Ctrl"),
+        (MOD_ALT.0, "Alt"),
+        (MOD_SHIFT.0, "Shift"),
+        (MOD_WIN.0, "Win"),
+    ];
 
-    let mods = hk.mods;
-    if (mods & 0x0002) != 0 {
-        parts.push("Ctrl".to_string());
-    }
-    if (mods & 0x0001) != 0 {
-        parts.push("Alt".to_string());
-    }
-    if (mods & 0x0004) != 0 {
-        parts.push("Shift".to_string());
-    }
-    if (mods & 0x0008) != 0 {
-        parts.push("Win".to_string());
-    }
+    let parts: Vec<&str> = MODS
+        .iter()
+        .filter_map(|&(m, s)| ((hk.mods & m) != 0).then_some(s))
+        .collect();
 
-    let key = match hk.vk {
-        0x13 => "Pause".to_string(),  // VK_PAUSE
-        0x03 => "Cancel".to_string(), // VK_CANCEL (Break)
+    let key = match hk.vk as u16 {
+        v if v == VK_PAUSE.0 => "Pause".to_string(),
+        v if v == VK_CANCEL.0 => "Cancel".to_string(),
         _ => format!("VK 0x{:02X}", hk.vk),
     };
 
-    parts.push(key);
-    parts.join(" + ")
+    parts
+        .into_iter()
+        .map(str::to_string)
+        .chain(std::iter::once(key))
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
-unsafe fn set_hwnd_text(hwnd: windows::Win32::Foundation::HWND, s: &str) {
-    let wide: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
-    let _ = unsafe { SetWindowTextW(hwnd, windows::core::PCWSTR(wide.as_ptr())) };
+fn set_hwnd_text(hwnd: HWND, s: &str) {
+    let mut wide: Vec<u16> = s.encode_utf16().collect();
+    wide.push(0);
+    unsafe {
+        let _ = SetWindowTextW(hwnd, PCWSTR(wide.as_ptr()));
+    }
 }
 
 fn apply_config_to_ui(state: &AppState, cfg: &config::Config) {
@@ -203,16 +213,16 @@ fn apply_config_to_ui(state: &AppState, cfg: &config::Config) {
 
         set_hwnd_text(
             state.hotkeys.last_word,
-            &format_hotkey(&cfg.hotkey_convert_last_word),
+            &format_hotkey(cfg.hotkey_convert_last_word),
         );
-        set_hwnd_text(state.hotkeys.pause, &format_hotkey(&cfg.hotkey_pause));
+        set_hwnd_text(state.hotkeys.pause, &format_hotkey(cfg.hotkey_pause));
         set_hwnd_text(
             state.hotkeys.selection,
-            &format_hotkey(&cfg.hotkey_convert_selection),
+            &format_hotkey(cfg.hotkey_convert_selection),
         );
         set_hwnd_text(
             state.hotkeys.switch_layout,
-            &format_hotkey(&cfg.hotkey_switch_layout),
+            &format_hotkey(cfg.hotkey_switch_layout),
         );
     }
 }
@@ -294,8 +304,6 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
 }
 
 fn on_command(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    use crate::app::ControlId;
-
     let id = helpers::loword(wparam.0) as i32;
     let notif = helpers::hiword(wparam.0);
 
@@ -308,26 +316,23 @@ fn on_command(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
     };
 
     match cid {
-        ControlId::Exit => {
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
-            LRESULT(0)
-        }
+        ControlId::Exit => unsafe {
+            let _ = DestroyWindow(hwnd);
+        },
         ControlId::Apply => {
             // TODO
-            LRESULT(0)
         }
         ControlId::Cancel => {
-            with_state_mut(hwnd, |state| {
+            let _ = with_state_mut(hwnd, |state| {
                 if let Ok(cfg) = config::load() {
                     apply_config_to_ui(state, &cfg);
                 }
             });
-            LRESULT(0)
         }
-        _ => LRESULT(0),
+        _ => {}
     }
+
+    LRESULT(0)
 }
 
 unsafe fn on_ncdestroy(hwnd: HWND) -> LRESULT {
@@ -347,12 +352,9 @@ unsafe fn on_ncdestroy(hwnd: HWND) -> LRESULT {
     LRESULT(0)
 }
 
-fn with_state_mut<F: FnOnce(&mut AppState)>(hwnd: HWND, f: F) {
+fn with_state_mut<R>(hwnd: HWND, f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
     unsafe {
         let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut AppState;
-        if p.is_null() {
-            return;
-        }
-        f(&mut *p);
+        (!p.is_null()).then(|| f(&mut *p))
     }
 }

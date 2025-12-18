@@ -1,8 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_CONTROL, VK_CANCEL, VK_PAUSE};
+
+const APP_DIR: &str = "RustSwitcher";
+const CONFIG_FILE: &str = "config.json";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Hotkey {
     pub vk: u32,
     pub mods: u32,
@@ -26,11 +31,14 @@ impl Default for Config {
             start_on_startup: false,
             show_tray_icon: false,
             delay_ms: 100,
-            hotkey_convert_last_word: Some(Hotkey { vk: 0x13, mods: 0 }), // VK_PAUSE
+            hotkey_convert_last_word: Some(Hotkey {
+                vk: VK_PAUSE.0 as u32,
+                mods: 0,
+            }),
             hotkey_convert_selection: Some(Hotkey {
-                vk: 0x03,
-                mods: 0x0002,
-            }), // VK_CANCEL + MOD_CONTROL
+                vk: VK_CANCEL.0 as u32,
+                mods: MOD_CONTROL.0,
+            }),
             hotkey_switch_layout: None,
             hotkey_pause: None,
             paused: false,
@@ -41,26 +49,30 @@ impl Default for Config {
 pub fn config_path() -> io::Result<PathBuf> {
     let appdata = std::env::var_os("APPDATA")
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "APPDATA is not set"))?;
-    Ok(PathBuf::from(appdata)
-        .join("RustSwitcher")
-        .join("config.json"))
+
+    Ok(PathBuf::from(appdata).join(APP_DIR).join(CONFIG_FILE))
 }
 
-fn ensure_config_dir(path: &PathBuf) -> io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    Ok(())
+fn ensure_parent_dir(path: &Path) -> io::Result<()> {
+    let Some(dir) = path.parent() else {
+        return Ok(());
+    };
+    std::fs::create_dir_all(dir)
+}
+
+fn confy_err(e: confy::ConfyError) -> io::Error {
+    io::Error::other(e)
 }
 
 pub fn load() -> io::Result<Config> {
     let path = config_path()?;
-    ensure_config_dir(&path)?;
-    confy::load_path(path).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    ensure_parent_dir(&path)?;
+    confy::load_path(path).map_err(confy_err)
 }
 
+#[allow(dead_code)]
 pub fn save(cfg: &Config) -> io::Result<()> {
     let path = config_path()?;
-    ensure_config_dir(&path)?;
-    confy::store_path(path, cfg).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    ensure_parent_dir(&path)?;
+    confy::store_path(path, cfg).map_err(confy_err)
 }
