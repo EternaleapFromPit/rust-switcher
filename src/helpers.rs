@@ -7,6 +7,7 @@ use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, LPARAM, WPAR
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, HWND};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED};
+use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, GetWindowTextLengthW, GetWindowTextW, SendMessageW, SetWindowTextW,
     WINDOW_STYLE,
@@ -180,4 +181,10 @@ pub unsafe fn get_edit_u32(hwnd: HWND) -> Option<u32> {
         return None;
     }
     s.parse::<u32>().ok()
+}
+
+pub fn init_app_user_model_id() {
+    unsafe {
+        let _ = SetCurrentProcessExplicitAppUserModelID(w!("RustSwitcher"));
+    }
 }

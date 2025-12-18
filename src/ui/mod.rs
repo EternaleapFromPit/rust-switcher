@@ -8,6 +8,8 @@
 mod geom;
 use self::geom::*;
 
+pub(crate) mod error_notifier;
+
 use crate::app::{AppState, ControlId};
 use crate::helpers::ws_i32;
 use windows::Win32::Foundation::{HWND, RECT};

@@ -6,6 +6,7 @@
 //! present a settings window and respond to user actions.
 
 use crate::app::AppState;
+use crate::app::ControlId;
 use crate::config;
 use crate::helpers;
 use crate::hotkeys;
@@ -13,8 +14,6 @@ use crate::hotkeys::HotkeyAction;
 use crate::hotkeys::action_from_id;
 use crate::ui;
 use crate::visuals;
-
-use crate::app::ControlId;
 
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{DeleteObject, HFONT, HGDIOBJ};
@@ -35,6 +34,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_THICKFRAME,
 };
 use windows::core::{PCWSTR, Result, w};
+
+const WM_APP_ERROR: u32 = crate::ui::error_notifier::WM_APP_ERROR;
 
 fn register_main_class(
     class_name: PCWSTR,
@@ -269,6 +270,13 @@ fn on_create(hwnd: HWND) -> LRESULT {
     unsafe {
         let mut state = Box::new(AppState::default());
 
+        {
+            let e = helpers::last_error();
+            crate::ui::error_notifier::push(hwnd, &mut state, "Тест ⛑️", "Ошибка при запуске", &e);
+        }
+
+        let _ = on_app_error(hwnd);
+
         if ui::create_controls(hwnd, &mut state).is_err() {
             let _ = DestroyWindow(hwnd);
             return LRESULT(0);
@@ -334,6 +342,7 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             LRESULT(0)
         }
         WM_NCDESTROY => unsafe { on_ncdestroy(hwnd) },
+        WM_APP_ERROR => on_app_error(hwnd),
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
@@ -388,6 +397,8 @@ unsafe fn on_ncdestroy(hwnd: HWND) -> LRESULT {
         return LRESULT(0);
     }
 
+    crate::tray::remove_icon(hwnd);
+
     let state = unsafe { &mut *p };
 
     if !state.font.0.is_null() {
@@ -430,10 +441,22 @@ fn on_hotkey(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
         }
         HotkeyAction::SwitchLayout => {
             if !state.paused {
-                crate::conversion::switch_keyboard_layout();
+                let _ = crate::conversion::switch_keyboard_layout();
             }
         }
     });
 
+    LRESULT(0)
+}
+
+fn on_app_error(hwnd: HWND) -> LRESULT {
+    with_state_mut(hwnd, |state| {
+        if let Some(e) = crate::ui::error_notifier::drain_one(state) {
+            let _ = crate::tray::balloon_error(hwnd, &e.title, &e.user_text);
+
+            #[cfg(debug_assertions)]
+            eprintln!("{}: {}", e.title, e.debug_text);
+        }
+    });
     LRESULT(0)
 }

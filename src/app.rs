@@ -11,6 +11,15 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::HFONT;
 use windows::Win32::UI::WindowsAndMessaging::HMENU;
 
+use std::collections::VecDeque;
+
+#[derive(Debug, Clone)]
+pub struct UiError {
+    pub title: String,
+    pub user_text: String,
+    pub debug_text: String,
+}
+
 /// Per-window state used throughout the application.
 ///
 /// Stored in window user data. Contains handles of child controls and UI resources.
@@ -24,6 +33,7 @@ pub struct AppState {
     pub hotkeys: HotkeyEdits,
     pub buttons: Buttons,
     pub paused: bool,
+    pub errors: VecDeque<UiError>,
 }
 
 #[derive(Debug, Default)]
