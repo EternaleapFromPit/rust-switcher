@@ -10,10 +10,41 @@ use crate::helpers::ws_i32;
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
     BS_AUTOCHECKBOX, BS_GROUPBOX, CreateWindowExW, ES_NUMBER, ES_READONLY, GetClientRect,
-    SetWindowTextW, WINDOW_EX_STYLE, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
+    SetWindowTextW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP,
+    WS_VISIBLE,
 };
 use windows::core::PCWSTR;
 use windows::core::w;
+
+fn create_child(
+    parent: HWND,
+    ex_style: WINDOW_EX_STYLE,
+    class: PCWSTR,
+    text: PCWSTR,
+    style: WINDOW_STYLE,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    menu: Option<windows::Win32::UI::WindowsAndMessaging::HMENU>,
+) -> windows::core::Result<HWND> {
+    unsafe {
+        CreateWindowExW(
+            ex_style,
+            class,
+            text,
+            style,
+            x,
+            y,
+            w,
+            h,
+            Some(parent),
+            menu,
+            None,
+            None,
+        )
+    }
+}
 
 /// Internal helper which draws a label and a read‑only edit control on
 /// the same horizontal row.  A mutable reference to an `HWND` is
@@ -27,11 +58,9 @@ fn hotkey_row(
     w_edit: i32,
     label: PCWSTR,
     value: PCWSTR,
-    out_edit: &mut HWND,
-) -> windows::core::Result<()> {
+) -> windows::core::Result<HWND> {
     unsafe {
-        // Label describing the hotkey action
-        let _lbl = CreateWindowExW(
+        let _label_hwnd = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             w!("STATIC"),
             label,
@@ -46,8 +75,7 @@ fn hotkey_row(
             None,
         )?;
 
-        // Read‑only edit control showing the current shortcut
-        *out_edit = CreateWindowExW(
+        let edit_hwnd = CreateWindowExW(
             WS_EX_CLIENTEDGE,
             w!("EDIT"),
             value,
@@ -62,7 +90,7 @@ fn hotkey_row(
             None,
         )?;
 
-        Ok(())
+        Ok(edit_hwnd)
     }
 }
 
@@ -111,7 +139,8 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
         )?;
 
         // Autostart checkbox
-        state.checkboxes.autostart = CreateWindowExW(
+        state.checkboxes.autostart = create_child(
+            hwnd,
             WINDOW_EX_STYLE(0),
             w!("BUTTON"),
             w!("Start on startup"),
@@ -120,10 +149,7 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             top_y + 28,
             group_w_left - 24,
             20,
-            Some(hwnd),
             ControlId::Autostart.hmenu(),
-            None,
-            None,
         )?;
 
         // Tray icon checkbox
@@ -213,7 +239,7 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
         let w_edit = group_w_right - 12 - 12 - w_label - 8;
 
         // Convert last word hotkey
-        hotkey_row(
+        state.hotkeys.last_word = hotkey_row(
             hwnd,
             hx,
             hy,
@@ -221,25 +247,17 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             w_edit,
             w!("Convert last word:"),
             w!(""),
-            &mut state.hotkeys.last_word,
         )?;
+
         hy += 28;
 
         // Pause hotkey
-        hotkey_row(
-            hwnd,
-            hx,
-            hy,
-            w_label,
-            w_edit,
-            w!("Pause:"),
-            w!(""),
-            &mut state.hotkeys.pause,
-        )?;
+        state.hotkeys.pause = hotkey_row(hwnd, hx, hy, w_label, w_edit, w!("Pause:"), w!(""))?;
+
         hy += 28;
 
         // Convert selection hotkey
-        hotkey_row(
+        state.hotkeys.selection = hotkey_row(
             hwnd,
             hx,
             hy,
@@ -247,12 +265,12 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             w_edit,
             w!("Convert selection:"),
             w!(""),
-            &mut state.hotkeys.selection,
         )?;
+
         hy += 28;
 
         // Switch layout hotkey
-        hotkey_row(
+        state.hotkeys.switch_layout = hotkey_row(
             hwnd,
             hx,
             hy,
@@ -260,7 +278,6 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             w_edit,
             w!("Switch keyboard layout:"),
             w!(""),
-            &mut &mut state.hotkeys.switch_layout,
         )?;
 
         // Common button layout

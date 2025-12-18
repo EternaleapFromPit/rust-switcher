@@ -1,6 +1,6 @@
 //! Helper routines for interacting with the Windows API.  These
 //! functions wrap common patterns such as combining style flags or
-//! retrieving the last OS error.  A RAII guard is provided for
+//! retrieving the last OS error. A RAII guard is provided for
 //! enforcing a single application instance.
 
 use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, LPARAM, WPARAM};
@@ -20,7 +20,7 @@ use windows::core::{PCWSTR, w};
 /// `WINDOW_STYLE` for window styles) while certain flags are defined
 /// as plain integers.  This helper merges the two into a new
 /// `WINDOW_STYLE` by OR‑ing the underlying values.
-pub fn ws_i32(base: WINDOW_STYLE, extra: i32) -> WINDOW_STYLE {
+pub const fn ws_i32(base: WINDOW_STYLE, extra: i32) -> WINDOW_STYLE {
     WINDOW_STYLE(base.0 | extra as u32)
 }
 
@@ -76,7 +76,7 @@ pub fn single_instance_guard() -> Result<SingleInstanceGuard> {
 /// In the Windows message system a single `WPARAM` or `LPARAM` often
 /// encodes two separate 16‑bit values.  Use this helper to decode
 /// the low word from such a parameter.
-pub unsafe fn loword(v: usize) -> u16 {
+pub const fn loword(v: usize) -> u16 {
     (v & 0xffff) as u16
 }
 
@@ -85,7 +85,7 @@ pub unsafe fn loword(v: usize) -> u16 {
 /// See `loword` for more details.  This function shifts the input
 /// right by 16 bits and masks off the low word to return the upper
 /// portion of a packed parameter.
-pub unsafe fn hiword(v: usize) -> u16 {
+pub const fn hiword(v: usize) -> u16 {
     ((v >> 16) & 0xffff) as u16
 }
 

@@ -66,6 +66,21 @@ pub enum ControlId {
 
 impl ControlId {
     #[inline]
+    pub const fn from_i32(v: i32) -> Option<Self> {
+        match v {
+            1001 => Some(Self::Autostart),
+            1002 => Some(Self::Tray),
+            1003 => Some(Self::DelayMs),
+
+            1101 => Some(Self::Apply),
+            1102 => Some(Self::Cancel),
+            1103 => Some(Self::Exit),
+
+            _ => None,
+        }
+    }
+    
+    #[inline]
     pub const fn hmenu(self) -> Option<HMENU> {
         Some(HMENU(self as i32 as usize as *mut c_void))
     }

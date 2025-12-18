@@ -5,7 +5,7 @@
 //! routines, the application state, and the UI construction code to
 //! present a settings window and respond to user actions.
 
-use crate::app::{AppState};
+use crate::app::AppState;
 use crate::config;
 use crate::helpers;
 use crate::ui;
@@ -294,25 +294,31 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
 }
 
 fn on_command(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    let id = unsafe { helpers::loword(wparam.0) };
-    let notif = unsafe { helpers::hiword(wparam.0) };
+    use crate::app::ControlId;
+
+    let id = helpers::loword(wparam.0) as i32;
+    let notif = helpers::hiword(wparam.0);
 
     if u32::from(notif) != BN_CLICKED {
         return LRESULT(0);
     }
 
-    match id as i32 {
-        ID_EXIT => {
+    let Some(cid) = ControlId::from_i32(id) else {
+        return LRESULT(0);
+    };
+
+    match cid {
+        ControlId::Exit => {
             unsafe {
                 let _ = DestroyWindow(hwnd);
             }
             LRESULT(0)
         }
-        ID_APPLY => {
+        ControlId::Apply => {
             // TODO
             LRESULT(0)
         }
-        ID_CANCEL => {
+        ControlId::Cancel => {
             with_state_mut(hwnd, |state| {
                 if let Ok(cfg) = config::load() {
                     apply_config_to_ui(state, &cfg);
