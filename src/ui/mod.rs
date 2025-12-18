@@ -5,6 +5,9 @@
 //! creation are kept here to keep the message loop free of UI
 //! details.
 
+mod geom;
+use self::geom::*;
+
 use crate::app::{AppState, ControlId};
 use crate::helpers::ws_i32;
 use windows::Win32::Foundation::{HWND, RECT};
@@ -15,36 +18,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 use windows::core::w;
-
-#[derive(Clone, Copy, Debug)]
-struct Pt {
-    x: i32,
-    y: i32,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Sz {
-    w: i32,
-    h: i32,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct RectI {
-    pos: Pt,
-    size: Sz,
-}
-
-impl RectI {
-    const fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
-        Self {
-            pos: Pt { x, y },
-            size: Sz { w, h },
-        }
-    }
-    const fn offset(self, dx: i32, dy: i32) -> Self {
-        Self::new(self.pos.x + dx, self.pos.y + dy, self.size.w, self.size.h)
-    }
-}
 
 #[derive(Clone, Copy)]
 struct ControlSpec {
@@ -63,10 +36,10 @@ fn create(parent: HWND, s: ControlSpec) -> windows::core::Result<HWND> {
             s.class,
             s.text,
             s.style,
-            s.rect.pos.x,
-            s.rect.pos.y,
-            s.rect.size.w,
-            s.rect.size.h,
+            s.rect.x,
+            s.rect.y,
+            s.rect.w,
+            s.rect.h,
             Some(parent),
             s.menu,
             None,
@@ -112,35 +85,6 @@ fn hotkey_row_spec(
     }
 }
 
-#[derive(Clone, Copy)]
-struct Layout {
-    margin: i32,
-    group_h: i32,
-    group_w_left: i32,
-    gap: i32,
-    group_w_right: i32,
-}
-
-impl Layout {
-    const fn new() -> Self {
-        Self {
-            margin: 12,
-            group_h: 170,
-            group_w_left: 240,
-            gap: 12,
-            group_w_right: 260,
-        }
-    }
-    const fn left_x(self) -> i32 {
-        self.margin
-    }
-    const fn top_y(self) -> i32 {
-        self.margin
-    }
-    const fn right_x(self) -> i32 {
-        self.margin + self.group_w_left + self.gap
-    }
-}
 pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Result<()> {
     // Determine client size for possible future dynamic layout
     let (_w, _h) = unsafe {
@@ -153,11 +97,12 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
 
     let left_x = l.left_x();
     let top_y = l.top_y();
-    let right_x = l.right_x();
 
-    let group_h = l.group_h;
-    let group_w_left = l.group_w_left;
-    let group_w_right = l.group_w_right;
+    let right_x = l.right_x();
+    let group_h = l.group_h();
+
+    let group_w_left = l.group_w_left();
+    let group_w_right = l.group_w_right();
 
     // Settings group box
     let _grp_settings = create(
