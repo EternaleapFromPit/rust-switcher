@@ -26,6 +26,27 @@ fn fill_wide(dst: &mut [u16], s: &str) {
     }
 }
 
+fn shell_notify(
+    action: windows::Win32::UI::Shell::NOTIFY_ICON_MESSAGE,
+    nid: &NOTIFYICONDATAW,
+) -> windows::core::Result<()> {
+    unsafe {
+        match Shell_NotifyIconW(action, nid).ok() {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                if e.code() == windows::core::HRESULT(0) {
+                    Err(windows::core::Error::new(
+                        windows::core::HRESULT(0x80004005u32 as i32), // E_FAIL
+                        "Shell_NotifyIconW failed",
+                    ))
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+}
+
 unsafe fn default_icon(
     hwnd: HWND,
 ) -> windows::core::Result<windows::Win32::UI::WindowsAndMessaging::HICON> {
@@ -60,10 +81,8 @@ pub fn ensure_icon(hwnd: HWND) -> windows::core::Result<()> {
 
         fill_wide(&mut nid.szTip, "RustSwitcher");
 
-        Shell_NotifyIconW(NIM_ADD, &nid)
-            .ok()
-            .map_err(|_| helpers::last_error())?;
-        Ok(())
+        // NOTE: Shell_NotifyIconW returns BOOL, so we route it through shell_notify for proper Result handling.
+        shell_notify(NIM_ADD, &nid)
     }
 }
 
@@ -78,23 +97,17 @@ pub fn remove_icon(hwnd: HWND) {
 }
 
 pub fn balloon_error(hwnd: HWND, title: &str, text: &str) -> windows::core::Result<()> {
-    unsafe {
-        // Гарантируем, что иконка существует
-        let _ = ensure_icon(hwnd);
+    ensure_icon(hwnd)?;
 
-        let mut nid = NOTIFYICONDATAW::default();
-        nid.cbSize = core::mem::size_of::<NOTIFYICONDATAW>() as u32;
-        nid.hWnd = hwnd;
-        nid.uID = TRAY_UID;
-        nid.uFlags = NIF_INFO;
-        nid.dwInfoFlags = NIIF_ERROR;
+    let mut nid = NOTIFYICONDATAW::default();
+    nid.cbSize = core::mem::size_of::<NOTIFYICONDATAW>() as u32;
+    nid.hWnd = hwnd;
+    nid.uID = TRAY_UID;
+    nid.uFlags = NIF_INFO;
+    nid.dwInfoFlags = NIIF_ERROR;
 
-        fill_wide(&mut nid.szInfoTitle, title);
-        fill_wide(&mut nid.szInfo, text);
+    fill_wide(&mut nid.szInfoTitle, title);
+    fill_wide(&mut nid.szInfo, text);
 
-        Shell_NotifyIconW(NIM_MODIFY, &nid)
-            .ok()
-            .map_err(|_| helpers::last_error())?;
-        Ok(())
-    }
+    shell_notify(NIM_MODIFY, &nid)
 }

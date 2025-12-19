@@ -19,6 +19,8 @@ use crate::ui_call;
 use crate::visuals;
 
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::COLOR_WINDOW;
+use windows::Win32::Graphics::Gdi::GetSysColorBrush;
 use windows::Win32::Graphics::Gdi::{DeleteObject, HFONT, HGDIOBJ};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::MOD_ALT;
@@ -51,6 +53,7 @@ fn register_main_class(
         lpfnWndProc: Some(wndproc),
         lpszClassName: class_name,
         hInstance: hinstance,
+        hbrBackground: unsafe { GetSysColorBrush(COLOR_WINDOW) },
         ..Default::default()
     };
 

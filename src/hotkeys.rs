@@ -1,9 +1,10 @@
 use crate::config;
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{ERROR_HOTKEY_NOT_REGISTERED, HWND};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey,
 };
+use windows::core::HRESULT;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyAction {
@@ -29,13 +30,26 @@ pub fn action_from_id(id: i32) -> Option<HotkeyAction> {
     }
 }
 
-pub fn unregister_all(hwnd: HWND) {
-    unsafe {
-        let _ = UnregisterHotKey(Some(hwnd), HK_CONVERT_LAST_WORD_ID);
-        let _ = UnregisterHotKey(Some(hwnd), HK_PAUSE_TOGGLE_ID);
-        let _ = UnregisterHotKey(Some(hwnd), HK_CONVERT_SELECTION_ID);
-        let _ = UnregisterHotKey(Some(hwnd), HK_SWITCH_LAYOUT_ID);
+fn unregister_one_quiet(hwnd: HWND, id: i32) -> windows::core::Result<()> {
+    if let Err(e) = unsafe { UnregisterHotKey(Some(hwnd), id) }
+        && e.code() != HRESULT::from_win32(ERROR_HOTKEY_NOT_REGISTERED.0)
+    {
+        return Err(e);
     }
+    Ok(())
+}
+
+pub fn unregister_all(hwnd: HWND) -> windows::core::Result<()> {
+    for id in [
+        HK_CONVERT_LAST_WORD_ID,
+        HK_PAUSE_TOGGLE_ID,
+        HK_CONVERT_SELECTION_ID,
+        HK_SWITCH_LAYOUT_ID,
+    ] {
+        unregister_one_quiet(hwnd, id)?;
+    }
+
+    Ok(())
 }
 
 fn register_one(hwnd: HWND, id: i32, hk: Option<config::Hotkey>) -> windows::core::Result<()> {
@@ -44,15 +58,14 @@ fn register_one(hwnd: HWND, id: i32, hk: Option<config::Hotkey>) -> windows::cor
     };
 
     unsafe {
-        let _ = RegisterHotKey(Some(hwnd), id, HOT_KEY_MODIFIERS(hk.mods), hk.vk)?;
+        RegisterHotKey(Some(hwnd), id, HOT_KEY_MODIFIERS(hk.mods), hk.vk)?;
     }
 
     Ok(())
 }
 
 pub fn register_from_config(hwnd: HWND, cfg: &config::Config) -> windows::core::Result<()> {
-    // Перерегистрация безопаснее так: сначала снять все, потом поставить по конфигу
-    unregister_all(hwnd);
+    unregister_all(hwnd)?;
 
     register_one(hwnd, HK_CONVERT_LAST_WORD_ID, cfg.hotkey_convert_last_word)?;
     register_one(hwnd, HK_PAUSE_TOGGLE_ID, cfg.hotkey_pause)?;
