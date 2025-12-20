@@ -1,7 +1,9 @@
-use serde::{Deserialize, Serialize};
-use std::io;
-use std::path::{Path, PathBuf};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
+use serde::{Deserialize, Serialize};
 use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_CONTROL, VK_CANCEL, VK_PAUSE};
 
 const APP_DIR: &str = "RustSwitcher";

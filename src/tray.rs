@@ -1,13 +1,19 @@
-use windows::Win32::Foundation::{HINSTANCE, HWND};
-use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
+use windows::{
+    Win32::{
+        Foundation::{HINSTANCE, HWND},
+        UI::{
+            Shell::{
+                NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_ERROR, NIM_ADD, NIM_DELETE,
+                NIM_MODIFY, NIM_SETVERSION, NOTIFYICON_VERSION_4, NOTIFYICONDATAW,
+                Shell_NotifyIconW,
+            },
+            WindowsAndMessaging::{
+                GWLP_HINSTANCE, GetWindowLongPtrW, IMAGE_ICON, LR_SHARED, LoadImageW, WM_APP,
+            },
+        },
+    },
+    core::PCWSTR,
 };
-use windows::Win32::UI::WindowsAndMessaging::{
-    GWLP_HINSTANCE, GetWindowLongPtrW, IMAGE_ICON, LR_SHARED, LoadImageW, WM_APP,
-};
-
-use windows::core::PCWSTR;
 
 pub const WM_APP_TRAY: u32 = WM_APP + 2;
 const TRAY_UID: u32 = 1;

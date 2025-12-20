@@ -5,13 +5,9 @@
 //! Constants representing control identifiers are defined here so
 //! that they can be shared between modules.
 
-use std::ffi::c_void;
+use std::{collections::VecDeque, ffi::c_void};
 
-use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Gdi::HFONT;
-use windows::Win32::UI::WindowsAndMessaging::HMENU;
-
-use std::collections::VecDeque;
+use windows::Win32::{Foundation::HWND, Graphics::Gdi::HFONT, UI::WindowsAndMessaging::HMENU};
 
 #[derive(Debug, Clone)]
 pub struct UiError {

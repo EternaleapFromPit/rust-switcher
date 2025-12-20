@@ -1,18 +1,25 @@
+pub(crate) mod colors;
 mod geom;
 use self::geom::*;
 
 pub(crate) mod error_notifier;
 
-use crate::app::{AppState, ControlId};
-use crate::helpers::ws_i32;
-use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::UI::WindowsAndMessaging::{
-    BS_AUTOCHECKBOX, BS_GROUPBOX, CreateWindowExW, ES_NUMBER, ES_READONLY, GetClientRect,
-    SetWindowTextW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP,
-    WS_VISIBLE,
+use windows::{
+    Win32::{
+        Foundation::{HWND, RECT},
+        UI::WindowsAndMessaging::{
+            BS_AUTOCHECKBOX, BS_GROUPBOX, CreateWindowExW, ES_NUMBER, ES_READONLY, GetClientRect,
+            SetWindowTextW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP,
+            WS_VISIBLE,
+        },
+    },
+    core::{PCWSTR, w},
 };
-use windows::core::PCWSTR;
-use windows::core::w;
+
+use crate::{
+    app::{AppState, ControlId},
+    helpers::ws_i32,
+};
 
 #[derive(Clone, Copy)]
 struct ControlSpec {

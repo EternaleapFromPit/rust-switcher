@@ -1,10 +1,12 @@
-use crate::config;
-
-use windows::Win32::Foundation::{ERROR_HOTKEY_NOT_REGISTERED, HWND};
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey,
+use windows::{
+    Win32::{
+        Foundation::{ERROR_HOTKEY_NOT_REGISTERED, HWND},
+        UI::Input::KeyboardAndMouse::{HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey},
+    },
+    core::HRESULT,
 };
-use windows::core::HRESULT;
+
+use crate::config;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotkeyAction {

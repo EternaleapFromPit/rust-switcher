@@ -1,6 +1,9 @@
+use windows::Win32::{
+    Foundation::{HWND, LPARAM, WPARAM},
+    UI::WindowsAndMessaging::{PostMessageW, WM_APP},
+};
+
 use crate::app::{AppState, UiError};
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 pub const WM_APP_ERROR: u32 = WM_APP + 1;
 

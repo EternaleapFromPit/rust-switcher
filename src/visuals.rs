@@ -5,16 +5,23 @@
 //! controls.  Separating these routines keeps the window creation
 //! logic in `win` clear of stylistic concerns.
 
-use windows::Win32::Foundation::{E_FAIL, LPARAM, WPARAM};
-use windows::Win32::Graphics::Gdi::{CreateFontIndirectW, HFONT};
-use windows::Win32::UI::Controls::{
-    ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, SetWindowTheme,
+use windows::{
+    Win32::{
+        Foundation::{E_FAIL, LPARAM, WPARAM},
+        Graphics::Gdi::{CreateFontIndirectW, HFONT},
+        UI::{
+            Controls::{
+                ICC_STANDARD_CLASSES, INITCOMMONCONTROLSEX, InitCommonControlsEx, SetWindowTheme,
+            },
+            WindowsAndMessaging::{
+                EnumChildWindows, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS,
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SystemParametersInfoW,
+                WM_SETFONT,
+            },
+        },
+    },
+    core::{BOOL, Result, w},
 };
-use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS,
-    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SendMessageW, SystemParametersInfoW, WM_SETFONT,
-};
-use windows::core::{BOOL, Result, w};
 
 /// Register common control classes so that modern UI elements (e.g.
 /// group boxes, push buttons) can be created.

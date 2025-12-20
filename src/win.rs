@@ -5,39 +5,38 @@
 //! routines, the application state, and the UI construction code to
 //! present a settings window and respond to user actions.
 
-use crate::app::AppState;
-use crate::app::ControlId;
-use crate::config;
-use crate::helpers;
-use crate::hotkeys::HotkeyAction;
-use crate::hotkeys::action_from_id;
-use crate::hotkeys::register_from_config;
-use crate::ui;
-use crate::ui::error_notifier::T_CONFIG;
-use crate::ui::error_notifier::T_UI;
-use crate::ui_call;
-use crate::visuals;
-
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::COLOR_WINDOW;
-use windows::Win32::Graphics::Gdi::GetSysColorBrush;
-use windows::Win32::Graphics::Gdi::{DeleteObject, HFONT, HGDIOBJ};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::MOD_ALT;
-use windows::Win32::UI::Input::KeyboardAndMouse::MOD_CONTROL;
-use windows::Win32::UI::Input::KeyboardAndMouse::MOD_SHIFT;
-use windows::Win32::UI::Input::KeyboardAndMouse::MOD_WIN;
-use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CANCEL, VK_PAUSE};
-use windows::Win32::UI::WindowsAndMessaging::WM_HOTKEY;
-use windows::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, BN_CLICKED, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DefWindowProcW,
-    DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetMessageW, GetSystemMetrics,
-    GetWindowLongPtrW, HICON, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_SHARED, LoadImageW, MSG,
-    PostQuitMessage, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SW_SHOW, SendMessageW,
-    SetWindowLongPtrW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND,
-    WM_CREATE, WM_DESTROY, WM_SETICON, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
+use windows::{
+    Win32::{
+        Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Graphics::Gdi::{COLOR_WINDOW, DeleteObject, HFONT, HGDIOBJ},
+        System::LibraryLoader::GetModuleHandleW,
+        UI::{
+            Input::KeyboardAndMouse::{
+                MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, VK_CANCEL, VK_PAUSE,
+            },
+            WindowsAndMessaging::{
+                AdjustWindowRectEx, BN_CLICKED, CS_HREDRAW, CS_VREDRAW, CreateWindowExW,
+                DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetMessageW,
+                GetSystemMetrics, GetWindowLongPtrW, HICON, ICON_BIG, ICON_SMALL, IMAGE_ICON,
+                LR_SHARED, LoadImageW, MSG, PostQuitMessage, SM_CXICON, SM_CXSMICON, SM_CYICON,
+                SM_CYSMICON, SW_SHOW, SendMessageW, SetWindowLongPtrW, ShowWindow,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE,
+                WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_HOTKEY,
+                WM_SETICON, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
+            },
+        },
+    },
+    core::{PCWSTR, Result, w},
 };
-use windows::core::{PCWSTR, Result, w};
+
+use crate::{
+    app::{AppState, ControlId},
+    config, helpers,
+    hotkeys::{HotkeyAction, action_from_id, register_from_config},
+    ui,
+    ui::error_notifier::{T_CONFIG, T_UI},
+    ui_call, visuals,
+};
 
 const WM_APP_ERROR: u32 = crate::ui::error_notifier::WM_APP_ERROR;
 
@@ -356,6 +355,7 @@ pub fn run() -> Result<()> {
 /// The window procedure.  Handles creation, command and destroy
 /// messages.  Any unhandled messages are forwarded to the default
 /// procedure.
+
 pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     const WM_NCDESTROY: u32 = 0x0082;
 
@@ -363,12 +363,20 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         WM_CREATE => on_create(hwnd),
         WM_COMMAND => on_command(hwnd, wparam, lparam),
         WM_HOTKEY => on_hotkey(hwnd, wparam, lparam),
+
+        WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
+            crate::ui::colors::on_ctlcolor(wparam, lparam)
+        }
+
         WM_DESTROY => {
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
+
         WM_NCDESTROY => unsafe { on_ncdestroy(hwnd) },
+
         WM_APP_ERROR => on_app_error(hwnd),
+
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }

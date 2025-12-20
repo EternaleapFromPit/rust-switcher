@@ -3,17 +3,23 @@
 //! retrieving the last OS error. A RAII guard is provided for
 //! enforcing a single application instance.
 
-use windows::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, LPARAM, WPARAM};
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, HWND};
-use windows::Win32::System::Threading::CreateMutexW;
-use windows::Win32::UI::Controls::{BST_CHECKED, BST_UNCHECKED};
-use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
-use windows::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, GetWindowTextLengthW, GetWindowTextW, SendMessageW, SetWindowTextW,
-    WINDOW_STYLE,
+use windows::{
+    Win32::{
+        Foundation::{
+            CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, WPARAM,
+        },
+        System::Threading::CreateMutexW,
+        UI::{
+            Controls::{BST_CHECKED, BST_UNCHECKED},
+            Shell::SetCurrentProcessExplicitAppUserModelID,
+            WindowsAndMessaging::{
+                BM_GETCHECK, BM_SETCHECK, GetWindowTextLengthW, GetWindowTextW, SendMessageW,
+                SetWindowTextW, WINDOW_STYLE,
+            },
+        },
+    },
+    core::{Error, HRESULT, PCWSTR, Result, w},
 };
-use windows::core::{Error, HRESULT, Result};
-use windows::core::{PCWSTR, w};
 
 /// Combine a base `WINDOW_STYLE` with an additional integer flag.
 ///

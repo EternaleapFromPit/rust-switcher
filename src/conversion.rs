@@ -1,6 +1,5 @@
 use std::{ptr::null_mut, thread, time::Duration};
 
-use crate::app::AppState;
 use windows::Win32::{
     Foundation::{HANDLE, HGLOBAL, HWND, LPARAM, WPARAM},
     System::{
@@ -20,6 +19,8 @@ use windows::Win32::{
         },
     },
 };
+
+use crate::app::AppState;
 
 const VK_C_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x43);
 
