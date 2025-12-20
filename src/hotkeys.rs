@@ -56,12 +56,23 @@ pub fn unregister_all(hwnd: HWND) -> windows::core::Result<()> {
 
 fn register_one(hwnd: HWND, id: i32, hk: Option<config::Hotkey>) -> windows::core::Result<()> {
     let Some(hk) = hk else {
+        #[cfg(debug_assertions)]
+        crate::helpers::debug_log(&format!("hotkey id={} disabled", id));
         return Ok(());
     };
+
+    #[cfg(debug_assertions)]
+    crate::helpers::debug_log(&format!(
+        "RegisterHotKey id={} mods=0x{:X} vk=0x{:X}",
+        id, hk.mods, hk.vk
+    ));
 
     unsafe {
         RegisterHotKey(Some(hwnd), id, HOT_KEY_MODIFIERS(hk.mods), hk.vk)?;
     }
+
+    #[cfg(debug_assertions)]
+    crate::helpers::debug_log(&format!("RegisterHotKey OK id={}", id));
 
     Ok(())
 }

@@ -5,10 +5,12 @@
 //! routines, the application state, and the UI construction code to
 //! present a settings window and respond to user actions.
 
+mod debug_keyboard;
+
 use windows::{
     Win32::{
-        Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
-        Graphics::Gdi::{COLOR_WINDOW, DeleteObject, HFONT, HGDIOBJ},
+        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Graphics::Gdi::{COLOR_WINDOW, DeleteObject, GetSysColorBrush, HFONT, HGDIOBJ},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Input::KeyboardAndMouse::{
@@ -310,6 +312,9 @@ fn on_create(hwnd: HWND) -> LRESULT {
     #[rustfmt::skip]
     startup_or_return0!(hwnd, &mut state, "Failed to register hotkeys", register_from_config(hwnd, &cfg));
 
+    #[cfg(debug_assertions)]
+    debug_keyboard::install();
+
     init_font_and_visuals(hwnd, &mut state);
 
     unsafe {
@@ -355,7 +360,6 @@ pub fn run() -> Result<()> {
 /// The window procedure.  Handles creation, command and destroy
 /// messages.  Any unhandled messages are forwarded to the default
 /// procedure.
-
 pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     const WM_NCDESTROY: u32 = 0x0082;
 
@@ -470,6 +474,9 @@ fn on_command(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
 }
 
 unsafe fn on_ncdestroy(hwnd: HWND) -> LRESULT {
+    #[cfg(debug_assertions)]
+    debug_keyboard::uninstall();
+
     let p = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut AppState;
     if p.is_null() {
         return LRESULT(0);
@@ -503,15 +510,16 @@ fn with_state_mut_do(hwnd: HWND, f: impl FnOnce(&mut AppState)) {
         }
     }
 }
-
 fn on_hotkey(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    // Определяем действие по id
     let id = wparam.0 as i32;
+
+    #[cfg(debug_assertions)]
+    crate::helpers::debug_log(&format!("WM_HOTKEY id={}", id));
+
     let Some(action) = action_from_id(id) else {
         return LRESULT(0);
     };
 
-    // Получаем mutable state
     with_state_mut(hwnd, |state| match action {
         HotkeyAction::PauseToggle => {
             state.paused = !state.paused;

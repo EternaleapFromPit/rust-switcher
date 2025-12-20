@@ -201,3 +201,8 @@ pub fn debug_startup_notification(
     let e = crate::helpers::last_error();
     crate::ui::error_notifier::push(hwnd, state, "Test title ⛑️", "Startup test error", &e);
 }
+
+#[cfg(debug_assertions)]
+pub fn debug_log(msg: &str) {
+    eprintln!("RustSwitcher: {msg}");
+}
