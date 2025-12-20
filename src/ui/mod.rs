@@ -62,6 +62,7 @@ fn hotkey_row_spec(
     w_edit: i32,
     label: PCWSTR,
     value: PCWSTR,
+    menu: Option<windows::Win32::UI::WindowsAndMessaging::HMENU>,
 ) -> HotkeyRowSpec {
     let label_spec = ControlSpec {
         ex_style: WINDOW_EX_STYLE(0),
@@ -76,9 +77,9 @@ fn hotkey_row_spec(
         ex_style: WS_EX_CLIENTEDGE,
         class: w!("EDIT"),
         text: value,
-        style: ws_i32(WS_CHILD | WS_VISIBLE, ES_READONLY),
+        style: ws_i32(WS_CHILD | WS_VISIBLE | WS_TABSTOP, ES_READONLY),
         rect: RectI::new(x + w_label + 8, y, w_edit, 22),
-        menu: None,
+        menu,
     };
 
     HotkeyRowSpec {
@@ -87,26 +88,57 @@ fn hotkey_row_spec(
     }
 }
 
+struct UiLayout {
+    left_x: i32,
+    right_x: i32,
+    top_y: i32,
+    group_h: i32,
+    group_w_left: i32,
+    group_w_right: i32,
+}
+
+impl UiLayout {
+    fn new() -> Self {
+        let l = Layout::new();
+        Self {
+            left_x: l.left_x(),
+            right_x: l.right_x(),
+            top_y: l.top_y(),
+            group_h: l.group_h(),
+            group_w_left: l.group_w_left(),
+            group_w_right: l.group_w_right(),
+        }
+    }
+}
+
 pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Result<()> {
-    // Determine client size for possible future dynamic layout
-    let (_w, _h) = unsafe {
+    debug_read_client_rect(hwnd);
+
+    let l = UiLayout::new();
+
+    create_settings_group(hwnd, state, &l)?;
+    create_hotkeys_group(hwnd, state, &l)?;
+    create_buttons(hwnd, state, &l)?;
+
+    Ok(())
+}
+
+fn debug_read_client_rect(hwnd: HWND) {
+    let _ = unsafe {
         let mut rc = RECT::default();
         let _ = GetClientRect(hwnd, &mut rc);
         (rc.right - rc.left, rc.bottom - rc.top)
     };
+}
 
-    let l = Layout::new();
+fn create_settings_group(
+    hwnd: HWND,
+    state: &mut AppState,
+    l: &UiLayout,
+) -> windows::core::Result<()> {
+    let left_x = l.left_x;
+    let top_y = l.top_y;
 
-    let left_x = l.left_x();
-    let top_y = l.top_y();
-
-    let right_x = l.right_x();
-    let group_h = l.group_h();
-
-    let group_w_left = l.group_w_left();
-    let group_w_right = l.group_w_right();
-
-    // Settings group box
     let _grp_settings = create(
         hwnd,
         ControlSpec {
@@ -114,7 +146,7 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             class: w!("BUTTON"),
             text: w!("Settings"),
             style: ws_i32(WS_CHILD | WS_VISIBLE, BS_GROUPBOX),
-            rect: RectI::new(left_x, top_y, group_w_left, group_h),
+            rect: RectI::new(left_x, top_y, l.group_w_left, l.group_h),
             menu: None,
         },
     )?;
@@ -126,7 +158,7 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             class: w!("BUTTON"),
             text: w!("Start on startup"),
             style: ws_i32(WS_CHILD | WS_VISIBLE | WS_TABSTOP, BS_AUTOCHECKBOX),
-            rect: RectI::new(left_x + 12, top_y + 28, group_w_left - 24, 20),
+            rect: RectI::new(left_x + 12, top_y + 28, l.group_w_left - 24, 20),
             menu: ControlId::Autostart.hmenu(),
         },
     )?;
@@ -138,7 +170,7 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             class: w!("BUTTON"),
             text: w!("Show tray icon"),
             style: ws_i32(WS_CHILD | WS_VISIBLE | WS_TABSTOP, BS_AUTOCHECKBOX),
-            rect: RectI::new(left_x + 12, top_y + 52, group_w_left - 24, 20),
+            rect: RectI::new(left_x + 12, top_y + 52, l.group_w_left - 24, 20),
             menu: ControlId::Tray.hmenu(),
         },
     )?;
@@ -150,7 +182,7 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             class: w!("STATIC"),
             text: w!("Delay before switching:"),
             style: WS_CHILD | WS_VISIBLE,
-            rect: RectI::new(left_x + 12, top_y + 82, group_w_left - 24, 18),
+            rect: RectI::new(left_x + 12, top_y + 82, l.group_w_left - 24, 18),
             menu: None,
         },
     )?;
@@ -179,7 +211,17 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
         },
     )?;
 
-    // Hotkeys group box
+    Ok(())
+}
+
+fn create_hotkeys_group(
+    hwnd: HWND,
+    state: &mut AppState,
+    l: &UiLayout,
+) -> windows::core::Result<()> {
+    let top_y = l.top_y;
+    let right_x = l.right_x;
+
     let _grp_hotkeys = create(
         hwnd,
         ControlSpec {
@@ -187,33 +229,56 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             class: w!("BUTTON"),
             text: w!("Hotkeys"),
             style: ws_i32(WS_CHILD | WS_VISIBLE, BS_GROUPBOX),
-            rect: RectI::new(right_x, top_y, group_w_right, group_h),
+            rect: RectI::new(right_x, top_y, l.group_w_right, l.group_h),
             menu: None,
         },
     )?;
 
-    // Hotkey rows
     let hx = right_x + 12;
     let mut hy = top_y + 28;
     let w_label = 130;
-    let w_edit = group_w_right - 12 - 12 - w_label - 8;
+    let w_edit = l.group_w_right - 12 - 12 - w_label - 8;
 
     {
-        let row = hotkey_row_spec(hx, hy, w_label, w_edit, w!("Convert last word:"), w!(""));
+        let row = hotkey_row_spec(
+            hx,
+            hy,
+            w_label,
+            w_edit,
+            w!("Convert last word:"),
+            w!(""),
+            ControlId::HotkeyLastWord.hmenu(),
+        );
         let _ = create(hwnd, row.label)?;
         state.hotkeys.last_word = create(hwnd, row.edit)?;
         hy += 28;
     }
 
     {
-        let row = hotkey_row_spec(hx, hy, w_label, w_edit, w!("Pause:"), w!(""));
+        let row = hotkey_row_spec(
+            hx,
+            hy,
+            w_label,
+            w_edit,
+            w!("Pause:"),
+            w!(""),
+            ControlId::HotkeyPause.hmenu(),
+        );
         let _ = create(hwnd, row.label)?;
         state.hotkeys.pause = create(hwnd, row.edit)?;
         hy += 28;
     }
 
     {
-        let row = hotkey_row_spec(hx, hy, w_label, w_edit, w!("Convert selection:"), w!(""));
+        let row = hotkey_row_spec(
+            hx,
+            hy,
+            w_label,
+            w_edit,
+            w!("Convert selection:"),
+            w!(""),
+            ControlId::HotkeySelection.hmenu(),
+        );
         let _ = create(hwnd, row.label)?;
         state.hotkeys.selection = create(hwnd, row.edit)?;
         hy += 28;
@@ -227,13 +292,17 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             w_edit,
             w!("Switch keyboard layout:"),
             w!(""),
+            ControlId::HotkeySwitchLayout.hmenu(),
         );
         let _ = create(hwnd, row.label)?;
         state.hotkeys.switch_layout = create(hwnd, row.edit)?;
     }
 
-    // Buttons
-    let btn_y = top_y + group_h + 10;
+    Ok(())
+}
+
+fn create_buttons(hwnd: HWND, state: &mut AppState, l: &UiLayout) -> windows::core::Result<()> {
+    let btn_y = l.top_y + l.group_h + 10;
     let btn_h = 28;
     let btn_style = WS_CHILD | WS_VISIBLE | WS_TABSTOP;
 
@@ -244,7 +313,7 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             class: w!("BUTTON"),
             text: w!("Exit"),
             style: btn_style,
-            rect: RectI::new(left_x + 12, btn_y, 110, btn_h),
+            rect: RectI::new(l.left_x + 12, btn_y, 110, btn_h),
             menu: ControlId::Exit.hmenu(),
         },
     )?;
@@ -256,7 +325,7 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             class: w!("BUTTON"),
             text: w!("Apply"),
             style: btn_style,
-            rect: RectI::new(right_x + 40, btn_y, 90, btn_h),
+            rect: RectI::new(l.right_x + 40, btn_y, 90, btn_h),
             menu: ControlId::Apply.hmenu(),
         },
     )?;
@@ -268,7 +337,7 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
             class: w!("BUTTON"),
             text: w!("Cancel"),
             style: btn_style,
-            rect: RectI::new(right_x + 140, btn_y, 90, btn_h),
+            rect: RectI::new(l.right_x + 140, btn_y, 90, btn_h),
             menu: ControlId::Cancel.hmenu(),
         },
     )?;

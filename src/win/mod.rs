@@ -440,9 +440,21 @@ fn handle_cancel(hwnd: HWND, state: &mut AppState) {
     ui_call!(hwnd, state, T_UI, "Failed to update UI from config", apply_config_to_ui(state, &cfg));
 }
 
-fn on_command(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    let id = helpers::loword(wparam.0) as i32;
-    let notif = helpers::hiword(wparam.0);
+#[cfg_attr(
+    debug_assertions,
+    tracing::instrument(level = "info", skip_all, fields(msg, id, notif))
+)]
+fn on_command(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    #[cfg(debug_assertions)]
+    tracing::Span::current().record("msg", "WM_COMMAND");
+    let id = crate::helpers::loword(wparam.0) as i32;
+    let notif = crate::helpers::hiword(wparam.0) as u32;
+    #[cfg(debug_assertions)]
+    {
+        tracing::Span::current().record("id", id);
+        tracing::Span::current().record("notif", notif as i64);
+        tracing::info!(target: "ui", event = "command", id = id, notif = notif, lparam = lparam.0);
+    }
 
     if u32::from(notif) != BN_CLICKED {
         return LRESULT(0);

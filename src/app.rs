@@ -9,11 +9,64 @@ use std::{collections::VecDeque, ffi::c_void};
 
 use windows::Win32::{Foundation::HWND, Graphics::Gdi::HFONT, UI::WindowsAndMessaging::HMENU};
 
+use crate::config;
+
 #[derive(Debug, Clone)]
 pub struct UiError {
     pub title: String,
     pub user_text: String,
     pub debug_text: String,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum HotkeySlot {
+    LastWord,
+    Pause,
+    Selection,
+    SwitchLayout,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct HotkeyValues {
+    pub last_word: Option<config::Hotkey>,
+    pub pause: Option<config::Hotkey>,
+    pub selection: Option<config::Hotkey>,
+    pub switch_layout: Option<config::Hotkey>,
+}
+
+impl HotkeyValues {
+    pub fn from_config(cfg: &config::Config) -> Self {
+        Self {
+            last_word: cfg.hotkey_convert_last_word,
+            pause: cfg.hotkey_pause,
+            selection: cfg.hotkey_convert_selection,
+            switch_layout: cfg.hotkey_switch_layout,
+        }
+    }
+
+    pub fn get(&self, slot: HotkeySlot) -> Option<config::Hotkey> {
+        match slot {
+            HotkeySlot::LastWord => self.last_word,
+            HotkeySlot::Pause => self.pause,
+            HotkeySlot::Selection => self.selection,
+            HotkeySlot::SwitchLayout => self.switch_layout,
+        }
+    }
+
+    pub fn set(&mut self, slot: HotkeySlot, hk: Option<config::Hotkey>) {
+        match slot {
+            HotkeySlot::LastWord => self.last_word = hk,
+            HotkeySlot::Pause => self.pause = hk,
+            HotkeySlot::Selection => self.selection = hk,
+            HotkeySlot::SwitchLayout => self.switch_layout = hk,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct HotkeyCaptureUi {
+    pub active: bool,
+    pub slot: Option<HotkeySlot>,
 }
 
 /// Per-window state used throughout the application.
@@ -28,8 +81,15 @@ pub struct AppState {
     pub edits: Edits,
     pub hotkeys: HotkeyEdits,
     pub buttons: Buttons,
+
     pub paused: bool,
     pub errors: VecDeque<UiError>,
+
+    /// Temporary hotkeys currently shown in UI. Committed on Apply.
+    pub hotkey_values: HotkeyValues,
+
+    /// Which hotkey edit is currently capturing input.
+    pub hotkey_capture: HotkeyCaptureUi,
 }
 
 #[derive(Debug, Default)]
@@ -66,6 +126,11 @@ pub enum ControlId {
     Tray = 1002,
     DelayMs = 1003,
 
+    HotkeyLastWord = 1201,
+    HotkeyPause = 1202,
+    HotkeySelection = 1203,
+    HotkeySwitchLayout = 1204,
+
     Apply = 1101,
     Cancel = 1102,
     Exit = 1103,
@@ -78,6 +143,11 @@ impl ControlId {
             1001 => Some(Self::Autostart),
             1002 => Some(Self::Tray),
             1003 => Some(Self::DelayMs),
+
+            1201 => Some(Self::HotkeyLastWord),
+            1202 => Some(Self::HotkeyPause),
+            1203 => Some(Self::HotkeySelection),
+            1204 => Some(Self::HotkeySwitchLayout),
 
             1101 => Some(Self::Apply),
             1102 => Some(Self::Cancel),
