@@ -98,8 +98,8 @@ struct UiLayout {
 }
 
 impl UiLayout {
-    fn new() -> Self {
-        let l = Layout::new();
+    fn new(client_w: i32) -> Self {
+        let l = Layout::new(client_w);
         Self {
             left_x: l.left_x(),
             right_x: l.right_x(),
@@ -112,9 +112,8 @@ impl UiLayout {
 }
 
 pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Result<()> {
-    debug_read_client_rect(hwnd);
-
-    let l = UiLayout::new();
+    let (client_w, _client_h) = debug_read_client_rect(hwnd);
+    let l = UiLayout::new(client_w);
 
     create_settings_group(hwnd, state, &l)?;
     create_hotkeys_group(hwnd, state, &l)?;
@@ -123,12 +122,12 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
     Ok(())
 }
 
-fn debug_read_client_rect(hwnd: HWND) {
-    let _ = unsafe {
+fn debug_read_client_rect(hwnd: HWND) -> (i32, i32) {
+    unsafe {
         let mut rc = RECT::default();
         let _ = GetClientRect(hwnd, &mut rc);
         (rc.right - rc.left, rc.bottom - rc.top)
-    };
+    }
 }
 
 fn create_settings_group(
@@ -219,86 +218,133 @@ fn create_hotkeys_group(
     state: &mut AppState,
     l: &UiLayout,
 ) -> windows::core::Result<()> {
-    let top_y = l.top_y;
-    let right_x = l.right_x;
+    let root = HotkeysGroupLayout::new(l);
 
-    let _grp_hotkeys = create(
+    create_hotkeys_groupbox(hwnd, &root)?;
+    create_hotkey_rows(hwnd, state, &root)?;
+
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct HotkeysGroupLayout {
+    top_y: i32,
+    right_x: i32,
+    group_w: i32,
+    group_h: i32,
+    hx: i32,
+    hy0: i32,
+    w_label: i32,
+    w_edit: i32,
+}
+
+impl HotkeysGroupLayout {
+    fn new(l: &UiLayout) -> Self {
+        let right_x = l.right_x;
+        let top_y = l.top_y;
+
+        let group_w = l.group_w_right;
+        let group_h = l.group_h;
+
+        let hx = right_x + 12;
+        let hy0 = top_y + 28;
+
+        let w_label = 130;
+        let w_edit = group_w - 12 - 12 - w_label - 8;
+
+        Self {
+            top_y,
+            right_x,
+            group_w,
+            group_h,
+            hx,
+            hy0,
+            w_label,
+            w_edit,
+        }
+    }
+}
+
+fn create_hotkeys_groupbox(hwnd: HWND, g: &HotkeysGroupLayout) -> windows::core::Result<()> {
+    let _ = create(
         hwnd,
         ControlSpec {
             ex_style: WINDOW_EX_STYLE(0),
             class: w!("BUTTON"),
             text: w!("Hotkeys"),
             style: ws_i32(WS_CHILD | WS_VISIBLE, BS_GROUPBOX),
-            rect: RectI::new(right_x, top_y, l.group_w_right, l.group_h),
+            rect: RectI::new(g.right_x, g.top_y, g.group_w, g.group_h),
             menu: None,
         },
     )?;
+    Ok(())
+}
 
-    let hx = right_x + 12;
-    let mut hy = top_y + 28;
-    let w_label = 130;
-    let w_edit = l.group_w_right - 12 - 12 - w_label - 8;
+fn create_hotkey_rows(
+    hwnd: HWND,
+    state: &mut AppState,
+    g: &HotkeysGroupLayout,
+) -> windows::core::Result<()> {
+    let mut hy = g.hy0;
 
-    {
-        let row = hotkey_row_spec(
-            hx,
-            hy,
-            w_label,
-            w_edit,
-            w!("Convert last word:"),
-            w!(""),
-            ControlId::HotkeyLastWord.hmenu(),
-        );
-        let _ = create(hwnd, row.label)?;
-        state.hotkeys.last_word = create(hwnd, row.edit)?;
-        hy += 28;
-    }
+    state.hotkeys.last_word = create_hotkey_row(
+        hwnd,
+        g.hx,
+        hy,
+        g.w_label,
+        g.w_edit,
+        w!("Convert last word:"),
+        ControlId::HotkeyLastWord.hmenu(),
+    )?;
+    hy += 28;
 
-    {
-        let row = hotkey_row_spec(
-            hx,
-            hy,
-            w_label,
-            w_edit,
-            w!("Pause:"),
-            w!(""),
-            ControlId::HotkeyPause.hmenu(),
-        );
-        let _ = create(hwnd, row.label)?;
-        state.hotkeys.pause = create(hwnd, row.edit)?;
-        hy += 28;
-    }
+    state.hotkeys.pause = create_hotkey_row(
+        hwnd,
+        g.hx,
+        hy,
+        g.w_label,
+        g.w_edit,
+        w!("Pause:"),
+        ControlId::HotkeyPause.hmenu(),
+    )?;
+    hy += 28;
 
-    {
-        let row = hotkey_row_spec(
-            hx,
-            hy,
-            w_label,
-            w_edit,
-            w!("Convert selection:"),
-            w!(""),
-            ControlId::HotkeySelection.hmenu(),
-        );
-        let _ = create(hwnd, row.label)?;
-        state.hotkeys.selection = create(hwnd, row.edit)?;
-        hy += 28;
-    }
+    state.hotkeys.selection = create_hotkey_row(
+        hwnd,
+        g.hx,
+        hy,
+        g.w_label,
+        g.w_edit,
+        w!("Convert selection:"),
+        ControlId::HotkeySelection.hmenu(),
+    )?;
+    hy += 28;
 
-    {
-        let row = hotkey_row_spec(
-            hx,
-            hy,
-            w_label,
-            w_edit,
-            w!("Switch keyboard layout:"),
-            w!(""),
-            ControlId::HotkeySwitchLayout.hmenu(),
-        );
-        let _ = create(hwnd, row.label)?;
-        state.hotkeys.switch_layout = create(hwnd, row.edit)?;
-    }
+    state.hotkeys.switch_layout = create_hotkey_row(
+        hwnd,
+        g.hx,
+        hy,
+        g.w_label,
+        g.w_edit,
+        w!("Switch keyboard layout:"),
+        ControlId::HotkeySwitchLayout.hmenu(),
+    )?;
 
     Ok(())
+}
+
+fn create_hotkey_row(
+    hwnd: HWND,
+    x: i32,
+    y: i32,
+    w_label: i32,
+    w_edit: i32,
+    label: PCWSTR,
+    menu: Option<windows::Win32::UI::WindowsAndMessaging::HMENU>,
+) -> windows::core::Result<HWND> {
+    let row = hotkey_row_spec(x, y, w_label, w_edit, label, w!(""), menu);
+    let _ = create(hwnd, row.label)?;
+    create(hwnd, row.edit)
 }
 
 fn create_buttons(hwnd: HWND, state: &mut AppState, l: &UiLayout) -> windows::core::Result<()> {

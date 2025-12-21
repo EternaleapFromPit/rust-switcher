@@ -12,20 +12,15 @@ use windows::{
         Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Gdi::{COLOR_WINDOW, DeleteObject, GetSysColorBrush, HFONT, HGDIOBJ},
         System::LibraryLoader::GetModuleHandleW,
-        UI::{
-            Input::KeyboardAndMouse::{
-                MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, VK_CANCEL, VK_PAUSE,
-            },
-            WindowsAndMessaging::{
-                AdjustWindowRectEx, BN_CLICKED, CS_HREDRAW, CS_VREDRAW, CreateWindowExW,
-                DefWindowProcW, DestroyWindow, DispatchMessageW, EN_KILLFOCUS, EN_SETFOCUS,
-                GWLP_USERDATA, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, ICON_BIG,
-                ICON_SMALL, IMAGE_ICON, LR_SHARED, LoadImageW, MSG, PostQuitMessage, SM_CXICON,
-                SM_CXSMICON, SM_CYICON, SM_CYSMICON, SW_SHOW, SendMessageW, SetWindowLongPtrW,
-                ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE,
-                WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_HOTKEY,
-                WM_SETICON, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
-            },
+        UI::WindowsAndMessaging::{
+            AdjustWindowRectEx, BN_CLICKED, CS_HREDRAW, CS_VREDRAW, CreateWindowExW,
+            DefWindowProcW, DestroyWindow, DispatchMessageW, EN_KILLFOCUS, EN_SETFOCUS,
+            GWLP_USERDATA, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, ICON_BIG,
+            ICON_SMALL, IMAGE_ICON, LR_SHARED, LoadImageW, MSG, PostQuitMessage, SM_CXICON,
+            SM_CXSMICON, SM_CYICON, SM_CYSMICON, SW_SHOW, SendMessageW, SetWindowLongPtrW,
+            ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE,
+            WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_HOTKEY, WM_SETICON,
+            WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
         },
     },
     core::{PCWSTR, Result, w},
@@ -67,7 +62,7 @@ fn register_main_class(
 }
 
 fn compute_window_size(style: WINDOW_STYLE) -> Result<(i32, i32)> {
-    const CLIENT_W: i32 = 540;
+    const CLIENT_W: i32 = 760;
     const CLIENT_H: i32 = 230;
 
     let mut rect = RECT {
@@ -182,6 +177,31 @@ fn format_hotkey(hk: Option<config::Hotkey>) -> String {
         return "None".to_string();
     };
 
+    let chord = config::HotkeyChord {
+        mods: hk.mods,
+        vk: (hk.vk != 0).then_some(hk.vk),
+    };
+
+    format_hotkey_chord(chord)
+}
+
+fn format_hotkey_sequence(seq: Option<config::HotkeySequence>) -> String {
+    let Some(seq) = seq else {
+        return "None".to_string();
+    };
+
+    let mut chords: Vec<String> = Vec::new();
+    chords.push(format_hotkey_chord(seq.first));
+    if let Some(c1) = seq.second {
+        chords.push(format_hotkey_chord(c1));
+    }
+
+    chords.join("; ")
+}
+
+fn format_hotkey_chord(ch: config::HotkeyChord) -> String {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN};
+
     const MODS: &[(u32, &str)] = &[
         (MOD_CONTROL.0, "Ctrl"),
         (MOD_ALT.0, "Alt"),
@@ -189,55 +209,70 @@ fn format_hotkey(hk: Option<config::Hotkey>) -> String {
         (MOD_WIN.0, "Win"),
     ];
 
-    let parts: Vec<&str> = MODS
+    let mut parts: Vec<&str> = MODS
         .iter()
-        .filter_map(|&(m, s)| ((hk.mods & m) != 0).then_some(s))
+        .filter_map(|&(m, s)| ((ch.mods & m) != 0).then_some(s))
         .collect();
 
-    if hk.vk == 0 {
-        return if parts.is_empty() {
-            "None".to_string()
-        } else {
-            parts.join(" + ")
+    if let Some(vk) = ch.vk {
+        let key = match vk as u16 {
+            v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_PAUSE.0 => {
+                "Pause".to_string()
+            }
+            v if v == windows::Win32::UI::Input::KeyboardAndMouse::VK_CANCEL.0 => {
+                "Cancel".to_string()
+            }
+            _ => format!("VK 0x{:02X}", vk),
         };
+        parts.push(Box::leak(key.into_boxed_str()));
     }
 
-    let key = match hk.vk as u16 {
-        v if v == VK_PAUSE.0 => "Pause".to_string(),
-        v if v == VK_CANCEL.0 => "Cancel".to_string(),
-        _ => format!("VK 0x{:02X}", hk.vk),
-    };
-
-    parts
-        .into_iter()
-        .map(str::to_string)
-        .chain(std::iter::once(key))
-        .collect::<Vec<_>>()
-        .join(" + ")
+    if parts.is_empty() {
+        "None".to_string()
+    } else {
+        parts.join(" + ")
+    }
 }
 
 fn set_hwnd_text(hwnd: HWND, s: &str) -> windows::core::Result<()> {
     helpers::set_edit_text(hwnd, s)
 }
 
-fn apply_config_to_ui(state: &AppState, cfg: &config::Config) -> windows::core::Result<()> {
+fn apply_config_to_ui(state: &mut AppState, cfg: &config::Config) -> windows::core::Result<()> {
     helpers::set_checkbox(state.checkboxes.autostart, cfg.start_on_startup);
     helpers::set_checkbox(state.checkboxes.tray, cfg.show_tray_icon);
     helpers::set_edit_u32(state.edits.delay_ms, cfg.delay_ms)?;
 
-    set_hwnd_text(
-        state.hotkeys.last_word,
-        &format_hotkey(cfg.hotkey_convert_last_word),
-    )?;
-    set_hwnd_text(state.hotkeys.pause, &format_hotkey(cfg.hotkey_pause))?;
-    set_hwnd_text(
-        state.hotkeys.selection,
-        &format_hotkey(cfg.hotkey_convert_selection),
-    )?;
-    set_hwnd_text(
-        state.hotkeys.switch_layout,
-        &format_hotkey(cfg.hotkey_switch_layout),
-    )?;
+    state.hotkey_values = crate::app::HotkeyValues::from_config(cfg);
+    state.hotkey_sequence_values = crate::app::HotkeySequenceValues::from_config(cfg);
+
+    let last_word_text = if cfg.hotkey_convert_last_word_sequence.is_some() {
+        format_hotkey_sequence(cfg.hotkey_convert_last_word_sequence)
+    } else {
+        format_hotkey(cfg.hotkey_convert_last_word)
+    };
+    set_hwnd_text(state.hotkeys.last_word, &last_word_text)?;
+
+    let pause_text = if cfg.hotkey_pause_sequence.is_some() {
+        format_hotkey_sequence(cfg.hotkey_pause_sequence)
+    } else {
+        format_hotkey(cfg.hotkey_pause)
+    };
+    set_hwnd_text(state.hotkeys.pause, &pause_text)?;
+
+    let selection_text = if cfg.hotkey_convert_selection_sequence.is_some() {
+        format_hotkey_sequence(cfg.hotkey_convert_selection_sequence)
+    } else {
+        format_hotkey(cfg.hotkey_convert_selection)
+    };
+    set_hwnd_text(state.hotkeys.selection, &selection_text)?;
+
+    let switch_layout_text = if cfg.hotkey_switch_layout_sequence.is_some() {
+        format_hotkey_sequence(cfg.hotkey_switch_layout_sequence)
+    } else {
+        format_hotkey(cfg.hotkey_switch_layout)
+    };
+    set_hwnd_text(state.hotkeys.switch_layout, &switch_layout_text)?;
 
     Ok(())
 }
@@ -253,6 +288,11 @@ fn read_ui_to_config(state: &AppState, mut cfg: config::Config) -> config::Confi
     cfg.hotkey_pause = state.hotkey_values.pause;
     cfg.hotkey_convert_selection = state.hotkey_values.selection;
     cfg.hotkey_switch_layout = state.hotkey_values.switch_layout;
+
+    cfg.hotkey_convert_last_word_sequence = state.hotkey_sequence_values.last_word;
+    cfg.hotkey_pause_sequence = state.hotkey_sequence_values.pause;
+    cfg.hotkey_convert_selection_sequence = state.hotkey_sequence_values.selection;
+    cfg.hotkey_switch_layout_sequence = state.hotkey_sequence_values.switch_layout;
 
     cfg
 }
@@ -320,9 +360,8 @@ fn on_create(hwnd: HWND) -> LRESULT {
     };
 
     state.hotkey_values = crate::app::HotkeyValues::from_config(&cfg);
-
     #[rustfmt::skip]
-    startup_or_return0!(hwnd, &mut state, "Failed to apply config to UI", apply_config_to_ui(&state, &cfg));
+    startup_or_return0!(hwnd, &mut state, "Failed to apply config to UI", apply_config_to_ui(state.as_mut(), &cfg));
 
     #[rustfmt::skip]
     startup_or_return0!(hwnd, &mut state, "Failed to register hotkeys", register_from_config(hwnd, &cfg));

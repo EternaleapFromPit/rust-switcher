@@ -1,3 +1,5 @@
+use crate::ui::UiLayout;
+
 #[derive(Clone, Copy, Debug)]
 pub struct RectI {
     pub x: i32,
@@ -12,6 +14,44 @@ impl RectI {
     }
 }
 
+#[derive(Clone, Copy)]
+struct HotkeysGroupLayout {
+    top_y: i32,
+    right_x: i32,
+    group_w: i32,
+    group_h: i32,
+    hx: i32,
+    hy0: i32,
+    w_label: i32,
+    w_edit: i32,
+}
+
+impl HotkeysGroupLayout {
+    fn new(l: &UiLayout) -> Self {
+        let right_x = l.right_x;
+        let top_y = l.top_y;
+        let group_w = l.group_w_right;
+        let group_h = l.group_h;
+
+        let hx = right_x + 12;
+        let hy0 = top_y + 28;
+
+        let w_label = 130;
+        let w_edit = group_w - 12 - 12 - w_label - 8;
+
+        Self {
+            top_y,
+            right_x,
+            group_w,
+            group_h,
+            hx,
+            hy0,
+            w_label,
+            w_edit,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Layout {
     margin: i32,
@@ -22,13 +62,21 @@ pub struct Layout {
 }
 
 impl Layout {
-    pub const fn new() -> Self {
+    pub fn new(client_w: i32) -> Self {
+        let margin = 12;
+        let group_h = 170;
+        let group_w_left = 240;
+        let gap = 12;
+
+        let fixed = margin * 2 + group_w_left + gap;
+        let group_w_right = (client_w - fixed).max(420);
+
         Self {
-            margin: 12,
-            group_h: 170,
-            group_w_left: 240,
-            gap: 12,
-            group_w_right: 260,
+            margin,
+            group_h,
+            group_w_left,
+            gap,
+            group_w_right,
         }
     }
 

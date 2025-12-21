@@ -63,10 +63,51 @@ impl HotkeyValues {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct HotkeySequenceValues {
+    pub last_word: Option<config::HotkeySequence>,
+    pub pause: Option<config::HotkeySequence>,
+    pub selection: Option<config::HotkeySequence>,
+    pub switch_layout: Option<config::HotkeySequence>,
+}
+
+impl HotkeySequenceValues {
+    pub fn from_config(cfg: &config::Config) -> Self {
+        Self {
+            last_word: cfg.hotkey_convert_last_word_sequence,
+            pause: cfg.hotkey_pause_sequence,
+            selection: cfg.hotkey_convert_selection_sequence,
+            switch_layout: cfg.hotkey_switch_layout_sequence,
+        }
+    }
+
+    pub fn get(&self, slot: HotkeySlot) -> Option<config::HotkeySequence> {
+        match slot {
+            HotkeySlot::LastWord => self.last_word,
+            HotkeySlot::Pause => self.pause,
+            HotkeySlot::Selection => self.selection,
+            HotkeySlot::SwitchLayout => self.switch_layout,
+        }
+    }
+
+    pub fn set(&mut self, slot: HotkeySlot, seq: Option<config::HotkeySequence>) {
+        match slot {
+            HotkeySlot::LastWord => self.last_word = seq,
+            HotkeySlot::Pause => self.pause = seq,
+            HotkeySlot::Selection => self.selection = seq,
+            HotkeySlot::SwitchLayout => self.switch_layout = seq,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct HotkeyCaptureUi {
     pub active: bool,
     pub slot: Option<HotkeySlot>,
+
+    pub pending_mods: u32,
+    pub pending_mods_valid: bool,
+    pub saw_non_mod: bool,
 }
 
 /// Per-window state used throughout the application.
@@ -87,6 +128,7 @@ pub struct AppState {
 
     /// Temporary hotkeys currently shown in UI. Committed on Apply.
     pub hotkey_values: HotkeyValues,
+    pub hotkey_sequence_values: HotkeySequenceValues,
 
     /// Which hotkey edit is currently capturing input.
     pub hotkey_capture: HotkeyCaptureUi,

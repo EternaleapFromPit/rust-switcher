@@ -32,23 +32,52 @@ fn is_keyup_msg(msg: u32) -> bool {
     msg == WM_KEYUP || msg == WM_SYSKEYUP
 }
 
+fn chord_to_hotkey(ch: config::HotkeyChord) -> config::Hotkey {
+    config::Hotkey {
+        vk: ch.vk.unwrap_or(0),
+        mods: ch.mods,
+    }
+}
+
+fn push_chord(
+    existing: Option<config::HotkeySequence>,
+    chord: config::HotkeyChord,
+) -> config::HotkeySequence {
+    const DEFAULT_GAP_MS: u32 = 800;
+
+    match existing {
+        None => config::HotkeySequence {
+            first: chord,
+            second: None,
+            max_gap_ms: DEFAULT_GAP_MS,
+        },
+        Some(mut s) => match s.second {
+            None => {
+                s.second = Some(chord);
+                s
+            }
+            Some(prev_second) => {
+                s.first = prev_second;
+                s.second = Some(chord);
+                s
+            }
+        },
+    }
+}
+
 extern "system" fn proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
         let msg = wparam.0 as u32;
         let kb = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
         let vk = kb.vkCode;
 
+        let is_mod = mod_bit_for_vk(vk).is_some();
+
         if is_keydown_msg(msg) {
             if let Some(bit) = mod_bit_for_vk(vk) {
                 MODS_DOWN.fetch_or(bit, Ordering::Relaxed);
             }
-        } else if is_keyup_msg(msg) {
-            if let Some(bit) = mod_bit_for_vk(vk) {
-                MODS_DOWN.fetch_and(!bit, Ordering::Relaxed);
-            }
-        }
 
-        if is_keydown_msg(msg) {
             let hwnd_raw = MAIN_HWND.load(Ordering::Relaxed);
             if hwnd_raw != 0 {
                 let hwnd = HWND(hwnd_raw as *mut _);
@@ -63,15 +92,25 @@ extern "system" fn proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 
                     let mods = MODS_DOWN.load(Ordering::Relaxed);
 
-                    let hk = if mod_bit_for_vk(vk).is_some() {
-                        config::Hotkey { vk: 0, mods }
-                    } else {
-                        config::Hotkey { vk, mods }
-                    };
+                    if is_mod {
+                        state.hotkey_capture.pending_mods = mods;
+                        state.hotkey_capture.pending_mods_valid = true;
+                        state.hotkey_capture.saw_non_mod = false;
+                        return;
+                    }
 
-                    state.hotkey_values.set(slot, Some(hk));
+                    state.hotkey_capture.saw_non_mod = true;
+                    state.hotkey_capture.pending_mods_valid = false;
 
-                    let text = super::format_hotkey(Some(hk));
+                    let chord = config::HotkeyChord { mods, vk: Some(vk) };
+
+                    let prev = state.hotkey_sequence_values.get(slot);
+                    let seq = push_chord(prev, chord);
+
+                    state.hotkey_sequence_values.set(slot, Some(seq));
+                    state.hotkey_values.set(slot, Some(chord_to_hotkey(chord)));
+
+                    let text = super::format_hotkey_sequence(Some(seq));
                     let target = match slot {
                         crate::app::HotkeySlot::LastWord => state.hotkeys.last_word,
                         crate::app::HotkeySlot::Pause => state.hotkeys.pause,
@@ -87,9 +126,58 @@ extern "system" fn proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                 }
             }
         } else if is_keyup_msg(msg) {
+            if let Some(bit) = mod_bit_for_vk(vk) {
+                MODS_DOWN.fetch_and(!bit, Ordering::Relaxed);
+            }
+
             let hwnd_raw = MAIN_HWND.load(Ordering::Relaxed);
             if hwnd_raw != 0 {
                 let hwnd = HWND(hwnd_raw as *mut _);
+
+                super::with_state_mut_do(hwnd, |state| {
+                    if !state.hotkey_capture.active {
+                        return;
+                    }
+                    let Some(slot) = state.hotkey_capture.slot else {
+                        return;
+                    };
+
+                    if !is_mod {
+                        return;
+                    }
+
+                    let mods_now = MODS_DOWN.load(Ordering::Relaxed);
+
+                    if state.hotkey_capture.pending_mods_valid
+                        && !state.hotkey_capture.saw_non_mod
+                        && mods_now == 0
+                    {
+                        let chord = config::HotkeyChord {
+                            mods: state.hotkey_capture.pending_mods,
+                            vk: None,
+                        };
+
+                        let prev = state.hotkey_sequence_values.get(slot);
+                        let seq = push_chord(prev, chord);
+
+                        state.hotkey_sequence_values.set(slot, Some(seq));
+                        state.hotkey_values.set(slot, Some(chord_to_hotkey(chord)));
+
+                        state.hotkey_capture.pending_mods_valid = false;
+                        state.hotkey_capture.pending_mods = 0;
+
+                        let text = super::format_hotkey_sequence(Some(seq));
+                        let target = match slot {
+                            crate::app::HotkeySlot::LastWord => state.hotkeys.last_word,
+                            crate::app::HotkeySlot::Pause => state.hotkeys.pause,
+                            crate::app::HotkeySlot::Selection => state.hotkeys.selection,
+                            crate::app::HotkeySlot::SwitchLayout => state.hotkeys.switch_layout,
+                        };
+
+                        let _ = helpers::set_edit_text(target, &text);
+                    }
+                });
+
                 if super::with_state_mut(hwnd, |s| s.hotkey_capture.active).unwrap_or(false) {
                     return LRESULT(1);
                 }

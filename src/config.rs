@@ -60,6 +60,7 @@ impl Default for Config {
             start_on_startup: false,
             show_tray_icon: false,
             delay_ms: 100,
+
             hotkey_convert_last_word: Some(Hotkey {
                 vk: VK_PAUSE.0 as u32,
                 mods: 0,
@@ -70,8 +71,13 @@ impl Default for Config {
             }),
             hotkey_switch_layout: None,
             hotkey_pause: None,
+
             paused: false,
-            ..Default::default()
+
+            hotkey_convert_last_word_sequence: None,
+            hotkey_pause_sequence: None,
+            hotkey_convert_selection_sequence: None,
+            hotkey_switch_layout_sequence: None,
         }
     }
 }
