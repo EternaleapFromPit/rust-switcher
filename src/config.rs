@@ -15,6 +15,24 @@ pub struct Hotkey {
     pub mods: u32,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HotkeyChord {
+    // Битовая маска MOD_*
+    pub mods: u32,
+    // None означает "только модификаторы" (например Shift)
+    pub vk: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HotkeySequence {
+    // Всегда есть первый аккорд
+    pub first: HotkeyChord,
+    // Второй аккорд опционален (если None, то это обычная хоткея из одного аккорда)
+    pub second: Option<HotkeyChord>,
+    // Максимальная пауза между first и second
+    pub max_gap_ms: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub start_on_startup: bool,
@@ -25,6 +43,15 @@ pub struct Config {
     pub hotkey_switch_layout: Option<Hotkey>,
     pub hotkey_pause: Option<Hotkey>,
     pub paused: bool,
+
+    #[serde(default)]
+    pub hotkey_convert_last_word_sequence: Option<HotkeySequence>,
+    #[serde(default)]
+    pub hotkey_pause_sequence: Option<HotkeySequence>,
+    #[serde(default)]
+    pub hotkey_convert_selection_sequence: Option<HotkeySequence>,
+    #[serde(default)]
+    pub hotkey_switch_layout_sequence: Option<HotkeySequence>,
 }
 
 impl Default for Config {
@@ -44,6 +71,7 @@ impl Default for Config {
             hotkey_switch_layout: None,
             hotkey_pause: None,
             paused: false,
+            ..Default::default()
         }
     }
 }

@@ -18,11 +18,11 @@ use windows::{
             },
             WindowsAndMessaging::{
                 AdjustWindowRectEx, BN_CLICKED, CS_HREDRAW, CS_VREDRAW, CreateWindowExW,
-                DefWindowProcW, DestroyWindow, DispatchMessageW, GWLP_USERDATA, GetMessageW,
-                GetSystemMetrics, GetWindowLongPtrW, HICON, ICON_BIG, ICON_SMALL, IMAGE_ICON,
-                LR_SHARED, LoadImageW, MSG, PostQuitMessage, SM_CXICON, SM_CXSMICON, SM_CYICON,
-                SM_CYSMICON, SW_SHOW, SendMessageW, SetWindowLongPtrW, ShowWindow,
-                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE,
+                DefWindowProcW, DestroyWindow, DispatchMessageW, EN_KILLFOCUS, EN_SETFOCUS,
+                GWLP_USERDATA, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, ICON_BIG,
+                ICON_SMALL, IMAGE_ICON, LR_SHARED, LoadImageW, MSG, PostQuitMessage, SM_CXICON,
+                SM_CXSMICON, SM_CYICON, SM_CYSMICON, SW_SHOW, SendMessageW, SetWindowLongPtrW,
+                ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE,
                 WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_HOTKEY,
                 WM_SETICON, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
             },
@@ -194,6 +194,14 @@ fn format_hotkey(hk: Option<config::Hotkey>) -> String {
         .filter_map(|&(m, s)| ((hk.mods & m) != 0).then_some(s))
         .collect();
 
+    if hk.vk == 0 {
+        return if parts.is_empty() {
+            "None".to_string()
+        } else {
+            parts.join(" + ")
+        };
+    }
+
     let key = match hk.vk as u16 {
         v if v == VK_PAUSE.0 => "Pause".to_string(),
         v if v == VK_CANCEL.0 => "Cancel".to_string(),
@@ -240,6 +248,11 @@ fn read_ui_to_config(state: &AppState, mut cfg: config::Config) -> config::Confi
         cfg.show_tray_icon = helpers::get_checkbox(state.checkboxes.tray);
         cfg.delay_ms = helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(cfg.delay_ms);
     }
+
+    cfg.hotkey_convert_last_word = state.hotkey_values.last_word;
+    cfg.hotkey_pause = state.hotkey_values.pause;
+    cfg.hotkey_convert_selection = state.hotkey_values.selection;
+    cfg.hotkey_switch_layout = state.hotkey_values.switch_layout;
 
     cfg
 }
@@ -306,14 +319,15 @@ fn on_create(hwnd: HWND) -> LRESULT {
         }
     };
 
+    state.hotkey_values = crate::app::HotkeyValues::from_config(&cfg);
+
     #[rustfmt::skip]
     startup_or_return0!(hwnd, &mut state, "Failed to apply config to UI", apply_config_to_ui(&state, &cfg));
 
     #[rustfmt::skip]
     startup_or_return0!(hwnd, &mut state, "Failed to register hotkeys", register_from_config(hwnd, &cfg));
 
-    #[cfg(debug_assertions)]
-    debug_keyboard::install();
+    debug_keyboard::install(hwnd);
 
     init_font_and_visuals(hwnd, &mut state);
 
@@ -447,19 +461,64 @@ fn handle_cancel(hwnd: HWND, state: &mut AppState) {
 fn on_command(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     #[cfg(debug_assertions)]
     tracing::Span::current().record("msg", "WM_COMMAND");
+
     let id = crate::helpers::loword(wparam.0) as i32;
     let notif = crate::helpers::hiword(wparam.0) as u32;
+
     #[cfg(debug_assertions)]
     {
         tracing::Span::current().record("id", id);
         tracing::Span::current().record("notif", notif as i64);
-        tracing::info!(target: "ui", event = "command", id = id, notif = notif, lparam = lparam.0);
+        eprintln!("ui.command: id={} notif={} lparam={}", id, notif, lparam.0);
     }
 
-    if u32::from(notif) != BN_CLICKED {
+    if let Some(r) = handle_hotkey_capture_focus(hwnd, id, notif) {
+        return r;
+    }
+
+    if notif != BN_CLICKED {
         return LRESULT(0);
     }
 
+    handle_buttons(hwnd, id)
+}
+
+fn handle_hotkey_capture_focus(hwnd: HWND, id: i32, notif: u32) -> Option<LRESULT> {
+    let cid = ControlId::from_i32(id)?;
+
+    let slot = match cid {
+        ControlId::HotkeyLastWord => crate::app::HotkeySlot::LastWord,
+        ControlId::HotkeyPause => crate::app::HotkeySlot::Pause,
+        ControlId::HotkeySelection => crate::app::HotkeySlot::Selection,
+        ControlId::HotkeySwitchLayout => crate::app::HotkeySlot::SwitchLayout,
+        _ => return None,
+    };
+
+    match notif {
+        EN_SETFOCUS => {
+            with_state_mut_do(hwnd, |state| {
+                state.hotkey_capture.active = true;
+                state.hotkey_capture.slot = Some(slot);
+
+                #[cfg(debug_assertions)]
+                eprintln!("hotkey.capture: start slot={:?}", slot);
+            });
+            Some(LRESULT(0))
+        }
+        EN_KILLFOCUS => {
+            with_state_mut_do(hwnd, |state| {
+                state.hotkey_capture.active = false;
+
+                #[cfg(debug_assertions)]
+                eprintln!("hotkey.capture: stop slot={:?}", slot);
+            });
+            Some(LRESULT(0))
+        }
+        _ => Some(LRESULT(0)),
+    }
+}
+
+fn handle_buttons(hwnd: HWND, id: i32) -> LRESULT {
     let Some(cid) = ControlId::from_i32(id) else {
         return LRESULT(0);
     };
