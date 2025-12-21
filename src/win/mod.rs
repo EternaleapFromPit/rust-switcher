@@ -5,7 +5,7 @@
 //! routines, the application state, and the UI construction code to
 //! present a settings window and respond to user actions.
 
-mod debug_keyboard;
+mod keyboard;
 
 use windows::{
     Win32::{
@@ -179,6 +179,7 @@ fn format_hotkey(hk: Option<config::Hotkey>) -> String {
 
     let chord = config::HotkeyChord {
         mods: hk.mods,
+        mods_vks: 0,
         vk: (hk.vk != 0).then_some(hk.vk),
     };
 
@@ -227,17 +228,44 @@ fn format_hotkey_chord(ch: config::HotkeyChord) -> String {
 
     let mut parts: Vec<String> = Vec::new();
 
-    if (ch.mods & MOD_CONTROL.0) != 0 {
-        parts.push("Ctrl".to_string());
-    }
-    if (ch.mods & MOD_ALT.0) != 0 {
-        parts.push("Alt".to_string());
-    }
-    if (ch.mods & MOD_SHIFT.0) != 0 {
-        parts.push("Shift".to_string());
-    }
-    if (ch.mods & MOD_WIN.0) != 0 {
-        parts.push("Win".to_string());
+    if ch.mods_vks != 0 {
+        if (ch.mods_vks & config::MODVK_LCTRL) != 0 {
+            parts.push("LCtrl".to_string());
+        }
+        if (ch.mods_vks & config::MODVK_RCTRL) != 0 {
+            parts.push("RCtrl".to_string());
+        }
+        if (ch.mods_vks & config::MODVK_LALT) != 0 {
+            parts.push("LAlt".to_string());
+        }
+        if (ch.mods_vks & config::MODVK_RALT) != 0 {
+            parts.push("RAlt".to_string());
+        }
+        if (ch.mods_vks & config::MODVK_LSHIFT) != 0 {
+            parts.push("LShift".to_string());
+        }
+        if (ch.mods_vks & config::MODVK_RSHIFT) != 0 {
+            parts.push("RShift".to_string());
+        }
+        if (ch.mods_vks & config::MODVK_LWIN) != 0 {
+            parts.push("LWin".to_string());
+        }
+        if (ch.mods_vks & config::MODVK_RWIN) != 0 {
+            parts.push("RWin".to_string());
+        }
+    } else {
+        if (ch.mods & MOD_CONTROL.0) != 0 {
+            parts.push("Ctrl".to_string());
+        }
+        if (ch.mods & MOD_ALT.0) != 0 {
+            parts.push("Alt".to_string());
+        }
+        if (ch.mods & MOD_SHIFT.0) != 0 {
+            parts.push("Shift".to_string());
+        }
+        if (ch.mods & MOD_WIN.0) != 0 {
+            parts.push("Win".to_string());
+        }
     }
 
     if let Some(vk) = ch.vk {
@@ -381,7 +409,7 @@ fn on_create(hwnd: HWND) -> LRESULT {
     #[rustfmt::skip]
     startup_or_return0!(hwnd, &mut state, "Failed to register hotkeys", register_from_config(hwnd, &cfg));
 
-    debug_keyboard::install(hwnd);
+    keyboard::install(hwnd);
 
     init_font_and_visuals(hwnd, &mut state);
 
@@ -600,7 +628,7 @@ fn handle_buttons(hwnd: HWND, id: i32) -> LRESULT {
 
 unsafe fn on_ncdestroy(hwnd: HWND) -> LRESULT {
     #[cfg(debug_assertions)]
-    debug_keyboard::uninstall();
+    keyboard::uninstall();
 
     let p = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut AppState;
     if p.is_null() {

@@ -106,6 +106,7 @@ pub struct HotkeyCaptureUi {
     pub active: bool,
     pub slot: Option<HotkeySlot>,
 
+    pub pending_mods_vks: u32,
     pub pending_mods: u32,
     pub pending_mods_valid: bool,
     pub saw_non_mod: bool,

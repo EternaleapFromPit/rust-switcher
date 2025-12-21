@@ -15,11 +15,22 @@ pub struct Hotkey {
     pub mods: u32,
 }
 
+pub const MODVK_LCTRL: u32 = 1 << 0;
+pub const MODVK_RCTRL: u32 = 1 << 1;
+pub const MODVK_LSHIFT: u32 = 1 << 2;
+pub const MODVK_RSHIFT: u32 = 1 << 3;
+pub const MODVK_LALT: u32 = 1 << 4;
+pub const MODVK_RALT: u32 = 1 << 5;
+pub const MODVK_LWIN: u32 = 1 << 6;
+pub const MODVK_RWIN: u32 = 1 << 7;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HotkeyChord {
-    // Битовая маска MOD_*
     pub mods: u32,
-    // None означает "только модификаторы" (например Shift)
+
+    #[serde(default)]
+    pub mods_vks: u32,
+
     pub vk: Option<u32>,
 }
 
