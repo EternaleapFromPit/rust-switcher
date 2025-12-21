@@ -24,7 +24,9 @@ fn main() -> windows::core::Result<()> {
     init_tracing();
     helpers::init_app_user_model_id()?;
 
-    let _guard = helpers::single_instance_guard()?;
+    let Some(_guard) = helpers::single_instance_guard()? else {
+        return Ok(());
+    };
 
     win::run()
 }

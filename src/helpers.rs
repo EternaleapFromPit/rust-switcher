@@ -60,21 +60,16 @@ impl Drop for SingleInstanceGuard {
     }
 }
 
-/// Acquire the single instance mutex.
-///
-/// If the mutex already exists the process is terminated.  On
-/// success a `SingleInstanceGuard` is returned which releases the
-/// mutex when dropped.
-pub fn single_instance_guard() -> Result<SingleInstanceGuard> {
+pub fn single_instance_guard() -> Result<Option<SingleInstanceGuard>> {
     unsafe {
         let name = w!("Global\\RustSwitcher_SingleInstance");
         let h = CreateMutexW(None, false, PCWSTR(name.as_ptr()))?;
 
         if GetLastError() == ERROR_ALREADY_EXISTS {
-            std::process::exit(0);
+            return Ok(None);
         }
 
-        Ok(SingleInstanceGuard(h))
+        Ok(Some(SingleInstanceGuard(h)))
     }
 }
 
