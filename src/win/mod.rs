@@ -7,27 +7,32 @@
 
 mod hotkey_format;
 mod keyboard;
+mod state;
+mod window;
 
 pub(crate) use hotkey_format::{format_hotkey, format_hotkey_sequence};
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
-        Graphics::Gdi::{COLOR_WINDOW, DeleteObject, GetSysColorBrush, HFONT, HGDIOBJ},
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        Graphics::Gdi::{DeleteObject, HFONT, HGDIOBJ},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
-            AdjustWindowRectEx, BN_CLICKED, CS_HREDRAW, CS_VREDRAW, CreateWindowExW,
-            DefWindowProcW, DestroyWindow, DispatchMessageW, EN_KILLFOCUS, EN_SETFOCUS,
-            GWLP_USERDATA, GetMessageW, GetSystemMetrics, GetWindowLongPtrW, HICON, ICON_BIG,
-            ICON_SMALL, IMAGE_ICON, LR_SHARED, LoadImageW, MSG, PostQuitMessage, SM_CXICON,
-            SM_CXSMICON, SM_CYICON, SM_CYSMICON, SW_SHOW, SendMessageW, SetWindowLongPtrW,
-            ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COMMAND, WM_CREATE,
-            WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_HOTKEY, WM_SETICON,
+            BN_CLICKED, DefWindowProcW, DestroyWindow, EN_KILLFOCUS, EN_SETFOCUS, GWLP_USERDATA,
+            GetWindowLongPtrW, PostQuitMessage, SW_SHOW, SetWindowLongPtrW, ShowWindow, WM_COMMAND,
+            WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_HOTKEY,
             WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
         },
     },
     core::{PCWSTR, Result, w},
 };
 
+use self::{
+    state::{with_state_mut, with_state_mut_do},
+    window::{
+        compute_window_size, create_main_window, message_loop, register_main_class,
+        set_window_icons,
+    },
+};
 use crate::{
     app::{AppState, ControlId},
     config, helpers,
@@ -40,141 +45,6 @@ use crate::{
 };
 
 const WM_APP_ERROR: u32 = crate::ui::error_notifier::WM_APP_ERROR;
-
-fn register_main_class(
-    class_name: PCWSTR,
-    hinstance: windows::Win32::Foundation::HINSTANCE,
-) -> Result<()> {
-    use windows::Win32::UI::WindowsAndMessaging::{RegisterClassExW, WNDCLASSEXW};
-
-    let wc = WNDCLASSEXW {
-        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-        style: CS_HREDRAW | CS_VREDRAW,
-        lpfnWndProc: Some(wndproc),
-        lpszClassName: class_name,
-        hInstance: hinstance,
-        hbrBackground: unsafe { GetSysColorBrush(COLOR_WINDOW) },
-        ..Default::default()
-    };
-
-    unsafe {
-        if RegisterClassExW(&wc) == 0 {
-            return Err(helpers::last_error());
-        }
-    }
-    Ok(())
-}
-
-fn compute_window_size(style: WINDOW_STYLE) -> Result<(i32, i32)> {
-    const CLIENT_W: i32 = 760;
-    const CLIENT_H: i32 = 230;
-
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: CLIENT_W,
-        bottom: CLIENT_H,
-    };
-
-    unsafe {
-        AdjustWindowRectEx(&mut rect, style, false, WINDOW_EX_STYLE(0))?;
-    }
-
-    Ok((rect.right - rect.left, rect.bottom - rect.top))
-}
-
-fn create_main_window(
-    class_name: PCWSTR,
-    hinstance: windows::Win32::Foundation::HINSTANCE,
-    style: windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE,
-    x: i32,
-    y: i32,
-    window_w: i32,
-    window_h: i32,
-) -> Result<HWND> {
-    unsafe {
-        CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            class_name,
-            w!("RustSwitcher"),
-            style,
-            x,
-            y,
-            window_w,
-            window_h,
-            None,
-            None,
-            Some(hinstance),
-            None,
-        )
-    }
-}
-
-fn set_window_icons(hwnd: HWND, hinstance: HINSTANCE) {
-    unsafe {
-        let big = LoadImageW(
-            Some(hinstance),
-            #[allow(clippy::manual_dangling_ptr)]
-            PCWSTR(1usize as *const u16),
-            IMAGE_ICON,
-            GetSystemMetrics(SM_CXICON),
-            GetSystemMetrics(SM_CYICON),
-            LR_SHARED,
-        )
-        .ok()
-        .map(|h| HICON(h.0))
-        .unwrap_or_default();
-
-        let small = LoadImageW(
-            Some(hinstance),
-            #[allow(clippy::manual_dangling_ptr)]
-            PCWSTR(1usize as *const u16),
-            IMAGE_ICON,
-            GetSystemMetrics(SM_CXSMICON),
-            GetSystemMetrics(SM_CYSMICON),
-            LR_SHARED,
-        )
-        .ok()
-        .map(|h| HICON(h.0))
-        .unwrap_or_default();
-
-        if !big.0.is_null() {
-            let _ = SendMessageW(
-                hwnd,
-                WM_SETICON,
-                Some(WPARAM(ICON_BIG as usize)),
-                Some(LPARAM(big.0 as isize)),
-            );
-        }
-
-        if !small.0.is_null() {
-            let _ = SendMessageW(
-                hwnd,
-                WM_SETICON,
-                Some(WPARAM(ICON_SMALL as usize)),
-                Some(LPARAM(small.0 as isize)),
-            );
-        }
-    }
-}
-
-fn message_loop() -> Result<()> {
-    unsafe {
-        let mut msg = MSG::default();
-        loop {
-            let r = GetMessageW(&mut msg, None, 0, 0);
-            if r.0 == -1 {
-                return Err(helpers::last_error());
-            }
-            if r.0 == 0 {
-                break;
-            }
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
-    Ok(())
-}
 
 fn set_hwnd_text(hwnd: HWND, s: &str) -> windows::core::Result<()> {
     helpers::set_edit_text(hwnd, s)
@@ -587,21 +457,6 @@ unsafe fn on_ncdestroy(hwnd: HWND) -> LRESULT {
     LRESULT(0)
 }
 
-fn with_state_mut<R>(hwnd: HWND, f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
-    unsafe {
-        let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut AppState;
-        (!p.is_null()).then(|| f(&mut *p))
-    }
-}
-
-fn with_state_mut_do(hwnd: HWND, f: impl FnOnce(&mut AppState)) {
-    unsafe {
-        let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut AppState;
-        if !p.is_null() {
-            f(&mut *p);
-        }
-    }
-}
 fn on_hotkey(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
     let id = wparam.0 as i32;
 
