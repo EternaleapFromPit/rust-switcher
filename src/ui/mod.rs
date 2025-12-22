@@ -3,6 +3,7 @@ mod geom;
 use self::geom::*;
 
 pub(crate) mod error_notifier;
+pub mod info_notifier;
 
 use windows::{
     Win32::{

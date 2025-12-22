@@ -63,6 +63,15 @@ fn register_one(hwnd: HWND, id: i32, hk: Option<config::Hotkey>) -> windows::cor
         return Ok(());
     };
 
+    if hk.vk == 0 {
+        #[cfg(debug_assertions)]
+        crate::helpers::debug_log(&format!(
+            "hotkey id={} ignored: invalid vk=0x0 mods=0x{:X}",
+            id, hk.mods
+        ));
+        return Ok(());
+    }
+
     #[cfg(debug_assertions)]
     crate::helpers::debug_log(&format!(
         "RegisterHotKey id={} mods=0x{:X} vk=0x{:X}",

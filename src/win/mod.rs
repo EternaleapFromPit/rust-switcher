@@ -20,8 +20,8 @@ use windows::{
         UI::WindowsAndMessaging::{
             DefWindowProcW, GWLP_USERDATA, GetWindowLongPtrW, PostQuitMessage, SW_SHOW,
             SetWindowLongPtrW, ShowWindow, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORDLG,
-            WM_CTLCOLORSTATIC, WM_DESTROY, WM_HOTKEY, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW,
-            WS_THICKFRAME,
+            WM_CTLCOLORSTATIC, WM_DESTROY, WM_HOTKEY, WM_TIMER, WS_MAXIMIZEBOX,
+            WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
         },
     },
     core::{PCWSTR, Result, w},
@@ -226,6 +226,10 @@ fn on_create(hwnd: HWND) -> LRESULT {
 
     #[cfg(debug_assertions)]
     with_state_mut_do(hwnd, |state| {
+        use std::{thread::sleep, time};
+
+        helpers::debug_startup_notification(hwnd, state);
+        sleep(time::Duration::from_millis(2000));
         helpers::debug_startup_notification(hwnd, state);
     });
 
@@ -270,7 +274,7 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         WM_CREATE => on_create(hwnd),
         WM_COMMAND => commands::on_command(hwnd, wparam, lparam),
         WM_HOTKEY => on_hotkey(hwnd, wparam, lparam),
-
+        WM_TIMER => on_timer(hwnd, wparam),
         WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
             crate::ui::colors::on_ctlcolor(wparam, lparam)
         }
@@ -375,6 +379,29 @@ fn on_hotkey(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
     with_state_mut(hwnd, |state| match action {
         HotkeyAction::PauseToggle => {
             state.paused = !state.paused;
+
+            let hotkey_text = if state.hotkey_sequence_values.pause.is_some() {
+                format_hotkey_sequence(state.hotkey_sequence_values.pause)
+            } else {
+                format_hotkey(state.hotkey_values.pause)
+            };
+
+            let body = if state.paused {
+                format!(
+                    "Статус: деактивирована.\nКонвертация выключена.\nПереключить: {}",
+                    hotkey_text
+                )
+            } else {
+                format!(
+                    "Статус: активирована.\nКонвертация включена.\nПереключить: {}",
+                    hotkey_text
+                )
+            };
+
+            if let Err(e) = crate::tray::balloon_info(hwnd, "RustSwitcher", &body) {
+                #[cfg(debug_assertions)]
+                eprintln!("tray balloon failed: {:?}", e);
+            }
         }
         HotkeyAction::ConvertLastWord => {
             if !state.paused {
@@ -408,5 +435,65 @@ fn on_app_error(hwnd: HWND) -> LRESULT {
             eprintln!("{}: {}", e.title, e._debug_text);
         }
     });
+    LRESULT(0)
+}
+
+fn on_timer(hwnd: HWND, wparam: WPARAM) -> LRESULT {
+    #[cfg(debug_assertions)]
+    {
+        let id = wparam.0;
+
+        if id == crate::helpers::DEBUG_TIMER_ID_STARTUP_ERROR {
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::KillTimer(
+                    Some(hwnd),
+                    crate::helpers::DEBUG_TIMER_ID_STARTUP_ERROR,
+                );
+            }
+
+            with_state_mut(hwnd, |state| {
+                let e = crate::helpers::last_error();
+                crate::ui::error_notifier::push(
+                    hwnd,
+                    state,
+                    "Test title ⛑️",
+                    "Startup test error",
+                    &e,
+                );
+            });
+
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(
+                    Some(hwnd),
+                    crate::helpers::DEBUG_TIMER_ID_STARTUP_INFO,
+                    600,
+                    None,
+                );
+            }
+
+            return LRESULT(0);
+        }
+
+        if id == crate::helpers::DEBUG_TIMER_ID_STARTUP_INFO {
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::KillTimer(
+                    Some(hwnd),
+                    crate::helpers::DEBUG_TIMER_ID_STARTUP_INFO,
+                );
+            }
+
+            with_state_mut(hwnd, |state| {
+                crate::ui::info_notifier::push(
+                    hwnd,
+                    state,
+                    "Test title ⛑️",
+                    "Notification test info",
+                );
+            });
+
+            return LRESULT(0);
+        }
+    }
+
     LRESULT(0)
 }

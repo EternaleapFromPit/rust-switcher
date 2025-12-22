@@ -29,26 +29,115 @@ fn fill_wide(dst: &mut [u16], s: &str) {
         *last = 0;
     }
 }
-
 fn shell_notify(
     action: windows::Win32::UI::Shell::NOTIFY_ICON_MESSAGE,
     nid: &NOTIFYICONDATAW,
+    what: &str,
 ) -> windows::core::Result<()> {
     unsafe {
-        match Shell_NotifyIconW(action, nid).ok() {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                if e.code() == windows::core::HRESULT(0) {
-                    Err(windows::core::Error::new(
-                        windows::core::HRESULT(0x80004005u32 as i32), // E_FAIL
-                        "Shell_NotifyIconW failed",
-                    ))
-                } else {
-                    Err(e)
-                }
-            }
+        if Shell_NotifyIconW(action, nid).as_bool() {
+            Ok(())
+        } else {
+            Err(windows::core::Error::new(
+                windows::core::HRESULT(0x80004005u32 as i32), // E_FAIL
+                format!("Shell_NotifyIconW returned FALSE: {}", what),
+            ))
         }
     }
+}
+
+pub fn ensure_icon(hwnd: HWND) -> windows::core::Result<()> {
+    unsafe {
+        let mut nid = NOTIFYICONDATAW {
+            cbSize: core::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: TRAY_UID,
+            ..Default::default()
+        };
+
+        nid.uCallbackMessage = WM_APP_TRAY;
+        nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+
+        nid.hIcon = default_icon(hwnd)?;
+        fill_wide(&mut nid.szTip, "RustSwitcher");
+
+        // Shell_NotifyIconW может вернуть FALSE без last error.
+        // Поэтому делаем add, а если не вышло, пробуем modify.
+        if !Shell_NotifyIconW(NIM_ADD, &nid).as_bool() {
+            shell_notify(
+                NIM_MODIFY,
+                &nid,
+                "ensure_icon: NIM_MODIFY after NIM_ADD failure",
+            )?;
+        }
+
+        // Версия поведения
+        nid.uFlags = windows::Win32::UI::Shell::NOTIFY_ICON_DATA_FLAGS(0);
+        nid.Anonymous.uVersion = NOTIFYICON_VERSION_4;
+
+        if !Shell_NotifyIconW(NIM_SETVERSION, &nid).as_bool() {
+            // Это не критично для жизни, но пусть будет сигналом
+            return Err(windows::core::Error::new(
+                windows::core::HRESULT(0x80004005u32 as i32),
+                "Shell_NotifyIconW returned FALSE: ensure_icon NIM_SETVERSION",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+fn balloon_common(
+    hwnd: HWND,
+    title: &str,
+    text: &str,
+    flags: u32,
+    what: &str,
+) -> windows::core::Result<()> {
+    ensure_icon(hwnd)?;
+
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: core::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: TRAY_UID,
+        ..Default::default()
+    };
+
+    // Всегда шлем NIF_MESSAGE + callback, чтобы Explorer не терял связку
+    nid.uCallbackMessage = WM_APP_TRAY;
+    nid.uFlags = NIF_INFO | NIF_MESSAGE;
+    nid.dwInfoFlags = windows::Win32::UI::Shell::NOTIFY_ICON_INFOTIP_FLAGS(flags);
+
+    // Можно задать таймаут (Windows может игнорировать, но вреда нет)
+    nid.Anonymous.uTimeout = 10_000;
+
+    fill_wide(&mut nid.szInfoTitle, title);
+    fill_wide(&mut nid.szInfo, text);
+
+    // Первая попытка
+    if unsafe { Shell_NotifyIconW(NIM_MODIFY, &nid).as_bool() } {
+        return Ok(());
+    }
+
+    // Самовосстановление: пересоздаем иконку и пробуем еще раз
+    remove_icon(hwnd);
+    ensure_icon(hwnd)?;
+
+    shell_notify(NIM_MODIFY, &nid, what)
+}
+
+pub fn balloon_error(hwnd: HWND, title: &str, text: &str) -> windows::core::Result<()> {
+    balloon_common(hwnd, title, text, NIIF_ERROR.0, "balloon_error: NIM_MODIFY")
+}
+
+pub fn balloon_info(hwnd: HWND, title: &str, text: &str) -> windows::core::Result<()> {
+    balloon_common(
+        hwnd,
+        title,
+        text,
+        windows::Win32::UI::Shell::NIIF_INFO.0,
+        "balloon_info: NIM_MODIFY",
+    )
 }
 
 unsafe fn default_icon(
@@ -84,59 +173,4 @@ pub fn remove_icon(hwnd: HWND) {
 
         let _ = Shell_NotifyIconW(NIM_DELETE, &nid);
     }
-}
-
-pub fn ensure_icon(hwnd: HWND) -> windows::core::Result<()> {
-    unsafe {
-        let mut nid = NOTIFYICONDATAW {
-            cbSize: core::mem::size_of::<NOTIFYICONDATAW>() as u32,
-            hWnd: hwnd,
-            uID: TRAY_UID,
-            ..Default::default()
-        };
-
-        nid.uCallbackMessage = WM_APP_TRAY;
-        nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-
-        nid.hIcon = default_icon(hwnd)?;
-        fill_wide(&mut nid.szTip, "RustSwitcher");
-
-        // Try add, fall back to modify if the icon already exists.
-        if let Err(e) = shell_notify(NIM_ADD, &nid) {
-            let code = e.code();
-            let already_exists_183 = windows::core::HRESULT::from_win32(183); // ERROR_ALREADY_EXISTS
-            let file_exists_80 = windows::core::HRESULT::from_win32(80); // ERROR_FILE_EXISTS
-
-            if code == already_exists_183 || code == file_exists_80 {
-                shell_notify(NIM_MODIFY, &nid)?;
-            } else {
-                return Err(e);
-            }
-        }
-
-        // Ensure modern behavior for notifications and callbacks.
-        nid.uFlags = windows::Win32::UI::Shell::NOTIFY_ICON_DATA_FLAGS(0);
-        nid.Anonymous.uVersion = NOTIFYICON_VERSION_4;
-
-        shell_notify(NIM_SETVERSION, &nid)
-    }
-}
-
-pub fn balloon_error(hwnd: HWND, title: &str, text: &str) -> windows::core::Result<()> {
-    ensure_icon(hwnd)?;
-
-    let mut nid = NOTIFYICONDATAW {
-        cbSize: core::mem::size_of::<NOTIFYICONDATAW>() as u32,
-        hWnd: hwnd,
-        uID: TRAY_UID,
-        ..Default::default()
-    };
-
-    nid.uFlags = NIF_INFO;
-    nid.dwInfoFlags = NIIF_ERROR; // важно: без NIIF_USER
-
-    fill_wide(&mut nid.szInfoTitle, title);
-    fill_wide(&mut nid.szInfo, text);
-
-    shell_notify(NIM_MODIFY, &nid)
 }

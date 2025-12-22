@@ -12,7 +12,8 @@ use windows::Win32::{
     UI::{
         Input::KeyboardAndMouse::{
             GetKeyboardLayout, GetKeyboardLayoutList, HKL, INPUT, INPUT_0, INPUT_KEYBOARD,
-            KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL,
+            KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LEFT, VK_RIGHT,
+            VK_SHIFT,
         },
         WindowsAndMessaging::{
             GetForegroundWindow, GetWindowThreadProcessId, PostMessageW, WM_INPUTLANGCHANGEREQUEST,
@@ -30,7 +31,28 @@ const VK_SHIFT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x10);
 const CF_UNICODETEXT_ID: u32 = 13;
 
 pub fn convert_last_word(state: &mut AppState, hwnd: HWND) {
-    convert_selection(state, hwnd)
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return;
+        }
+    }
+
+    // Выделяем слово слева от каретки
+    if !send_ctrl_shift_combo(VK_LEFT) {
+        return;
+    }
+
+    thread::sleep(Duration::from_millis(20));
+
+    // Конвертируем выделение обычным путем
+    convert_selection(state, hwnd);
+
+    // Схлопываем выделение в конец, чтобы не оставлять активное выделение
+    unsafe {
+        let _ = send_key(VK_RIGHT, false);
+        let _ = send_key(VK_RIGHT, true);
+    }
 }
 
 pub fn convert_selection(state: &mut AppState, _hwnd: HWND) {
@@ -137,6 +159,15 @@ fn post_layout_change(fg: HWND, hkl: HKL) -> windows::core::Result<()> {
         )?;
     }
     Ok(())
+}
+
+fn send_ctrl_shift_combo(vk: VIRTUAL_KEY) -> bool {
+    (unsafe { send_key(VK_CONTROL, false) })
+        && (unsafe { send_key(VK_SHIFT, false) })
+        && unsafe { send_key(vk, false) }
+        && unsafe { send_key(vk, true) }
+        && (unsafe { send_key(VK_SHIFT, true) })
+        && unsafe { send_key(VK_CONTROL, true) }
 }
 
 unsafe fn send_ctrl_combo(vk: VIRTUAL_KEY) -> bool {

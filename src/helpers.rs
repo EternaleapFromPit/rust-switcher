@@ -185,20 +185,32 @@ pub fn get_edit_u32(hwnd: HWND) -> Option<u32> {
     s.parse::<u32>().ok()
 }
 
+#[cfg(debug_assertions)]
+pub const DEBUG_TIMER_ID_STARTUP_ERROR: usize = 0xC001;
+
+#[cfg(debug_assertions)]
+pub const DEBUG_TIMER_ID_STARTUP_INFO: usize = 0xC002;
+
 pub fn init_app_user_model_id() -> windows::core::Result<()> {
     unsafe { SetCurrentProcessExplicitAppUserModelID(w!("RustSwitcher")) }
 }
 
 #[cfg(debug_assertions)]
-pub fn debug_startup_notification(
-    hwnd: windows::Win32::Foundation::HWND,
-    state: &mut crate::app::AppState,
-) {
-    let e = crate::helpers::last_error();
-    crate::ui::error_notifier::push(hwnd, state, "Test title ⛑️", "Startup test error", &e);
+pub fn debug_log(msg: &str) {
+    eprintln!("RustSwitcher: {msg}");
 }
 
 #[cfg(debug_assertions)]
-pub fn debug_log(msg: &str) {
-    eprintln!("RustSwitcher: {msg}");
+pub fn debug_startup_notification(
+    hwnd: windows::Win32::Foundation::HWND,
+    _state: &mut crate::app::AppState,
+) {
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(
+            Some(hwnd),
+            DEBUG_TIMER_ID_STARTUP_ERROR,
+            800,
+            None,
+        );
+    }
 }
