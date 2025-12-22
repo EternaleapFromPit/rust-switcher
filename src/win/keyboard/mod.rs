@@ -1,23 +1,28 @@
+mod mods;
+mod sequence;
 mod vk;
 
-use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     System::SystemInformation::GetTickCount64,
     UI::WindowsAndMessaging::{
-        CallNextHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, PostMessageW, SetWindowsHookExW,
-        WH_KEYBOARD_LL, WM_HOTKEY,
+        CallNextHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, SetWindowsHookExW, WH_KEYBOARD_LL,
     },
 };
 
-use self::vk::{is_keydown_msg, is_keyup_msg, mod_bit_for_vk, mod_vk_bit_for_vk, normalize_vk};
-use crate::{config, helpers};
+use self::vk::{is_keydown_msg, is_keyup_msg, mod_bit_for_vk, normalize_vk};
+use crate::{
+    config, helpers,
+    win::keyboard::{
+        mods::{chord_from_vk, mods_now, update_mods_down_press, update_mods_down_release},
+        sequence::try_match_any_sequence,
+    },
+};
 
 static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
 static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
-static MODS_DOWN: AtomicU32 = AtomicU32::new(0);
-static MODVKS_DOWN: AtomicU32 = AtomicU32::new(0);
 
 fn now_tick_ms() -> u64 {
     unsafe { GetTickCount64() }
@@ -28,19 +33,6 @@ fn chord_to_hotkey(ch: config::HotkeyChord) -> config::Hotkey {
         vk: ch.vk.unwrap_or(0),
         mods: ch.mods,
     }
-}
-
-fn chord_matches(template: config::HotkeyChord, input: config::HotkeyChord) -> bool {
-    if template.mods != input.mods {
-        return false;
-    }
-    if template.vk != input.vk {
-        return false;
-    }
-    if template.mods_vks == 0 {
-        return true;
-    }
-    template.mods_vks == input.mods_vks
 }
 
 fn main_hwnd() -> Option<HWND> {
@@ -95,115 +87,6 @@ fn push_chord_capture(
     seq
 }
 
-fn progress_for_slot_mut(
-    state: &mut crate::app::AppState,
-    slot: crate::app::HotkeySlot,
-) -> &mut crate::app::SequenceProgress {
-    match slot {
-        crate::app::HotkeySlot::LastWord => &mut state.hotkey_sequence_progress.last_word,
-        crate::app::HotkeySlot::Pause => &mut state.hotkey_sequence_progress.pause,
-        crate::app::HotkeySlot::Selection => &mut state.hotkey_sequence_progress.selection,
-        crate::app::HotkeySlot::SwitchLayout => &mut state.hotkey_sequence_progress.switch_layout,
-    }
-}
-
-fn hotkey_id_for_slot(slot: crate::app::HotkeySlot) -> i32 {
-    match slot {
-        crate::app::HotkeySlot::LastWord => crate::hotkeys::HK_CONVERT_LAST_WORD_ID,
-        crate::app::HotkeySlot::Pause => crate::hotkeys::HK_PAUSE_TOGGLE_ID,
-        crate::app::HotkeySlot::Selection => crate::hotkeys::HK_CONVERT_SELECTION_ID,
-        crate::app::HotkeySlot::SwitchLayout => crate::hotkeys::HK_SWITCH_LAYOUT_ID,
-    }
-}
-
-fn post_hotkey(hwnd: HWND, id: i32) -> windows::core::Result<()> {
-    unsafe { PostMessageW(Some(hwnd), WM_HOTKEY, WPARAM(id as usize), LPARAM(0)) }
-}
-
-fn effective_gap_ms(_slot: crate::app::HotkeySlot, seq: config::HotkeySequence) -> u64 {
-    seq.max_gap_ms as u64
-}
-
-fn try_match_sequence(
-    hwnd: HWND,
-    state: &mut crate::app::AppState,
-    slot: crate::app::HotkeySlot,
-    chord: config::HotkeyChord,
-    now_ms: u64,
-) -> windows::core::Result<bool> {
-    let Some(seq) = state.active_hotkey_sequences.get(slot) else {
-        return Ok(false);
-    };
-
-    let first = seq.first;
-
-    // Single chord
-    let Some(second) = seq.second else {
-        if chord_matches(first, chord) {
-            post_hotkey(hwnd, hotkey_id_for_slot(slot))?;
-            return Ok(true);
-        }
-        return Ok(false);
-    };
-
-    let gap_ms = effective_gap_ms(slot, seq);
-    let prog = progress_for_slot_mut(state, slot);
-
-    if prog.waiting_second {
-        let elapsed_ms = now_ms.saturating_sub(prog.first_tick_ms);
-        if elapsed_ms > gap_ms {
-            prog.waiting_second = false;
-            prog.first_tick_ms = 0;
-        }
-    }
-
-    if prog.waiting_second {
-        if chord_matches(second, chord) {
-            prog.waiting_second = false;
-            prog.first_tick_ms = 0;
-
-            post_hotkey(hwnd, hotkey_id_for_slot(slot))?;
-            return Ok(true);
-        }
-
-        if chord_matches(first, chord) {
-            prog.first_tick_ms = now_ms;
-            return Ok(true);
-        }
-
-        prog.waiting_second = false;
-        prog.first_tick_ms = 0;
-        return Ok(false);
-    }
-
-    if chord_matches(first, chord) {
-        prog.waiting_second = true;
-        prog.first_tick_ms = now_ms;
-        return Ok(true);
-    }
-
-    Ok(false)
-}
-
-fn try_match_any_sequence(
-    hwnd: HWND,
-    state: &mut crate::app::AppState,
-    chord: config::HotkeyChord,
-    now_ms: u64,
-) -> windows::core::Result<bool> {
-    for slot in [
-        crate::app::HotkeySlot::SwitchLayout,
-        crate::app::HotkeySlot::LastWord,
-        crate::app::HotkeySlot::Selection,
-        crate::app::HotkeySlot::Pause,
-    ] {
-        if try_match_sequence(hwnd, state, slot, chord, now_ms)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum HookDecision {
     Pass,
@@ -239,25 +122,6 @@ fn handle_keydown(vk: u32, is_mod: bool) -> windows::core::Result<HookDecision> 
         handle_keydown_in_state(hwnd, state, vk, is_mod, now_ms)
     })
     .unwrap_or(Ok(HookDecision::Pass))
-}
-
-fn update_mods_down_press(vk: u32) {
-    if let Some(bit) = mod_bit_for_vk(vk) {
-        MODS_DOWN.fetch_or(bit, Ordering::Relaxed);
-    }
-    if let Some(bit) = mod_vk_bit_for_vk(vk) {
-        MODVKS_DOWN.fetch_or(bit, Ordering::Relaxed);
-    }
-}
-
-fn chord_from_vk(vk: u32) -> config::HotkeyChord {
-    let mods = MODS_DOWN.load(Ordering::Relaxed);
-    let mods_vks = MODVKS_DOWN.load(Ordering::Relaxed);
-    config::HotkeyChord {
-        mods,
-        mods_vks,
-        vk: Some(vk),
-    }
 }
 
 fn handle_keydown_in_state(
@@ -375,15 +239,6 @@ fn handle_keyup(vk: u32, is_mod: bool) -> windows::core::Result<HookDecision> {
     .unwrap_or(Ok(HookDecision::Pass))
 }
 
-fn update_mods_down_release(vk: u32) {
-    if let Some(bit) = mod_bit_for_vk(vk) {
-        MODS_DOWN.fetch_and(!bit, Ordering::Relaxed);
-    }
-    if let Some(bit) = mod_vk_bit_for_vk(vk) {
-        MODVKS_DOWN.fetch_and(!bit, Ordering::Relaxed);
-    }
-}
-
 fn handle_keyup_in_state(
     hwnd: HWND,
     state: &mut crate::app::AppState,
@@ -418,7 +273,7 @@ fn handle_keyup_capture(
         return Ok(HookDecision::Swallow);
     }
 
-    let mods_now = MODS_DOWN.load(Ordering::Relaxed);
+    let mods_now = mods_now();
     if mods_now != 0 {
         return Ok(HookDecision::Swallow);
     }
@@ -462,7 +317,7 @@ fn handle_keyup_runtime(
         return Ok(HookDecision::Pass);
     }
 
-    let mods_now = MODS_DOWN.load(Ordering::Relaxed);
+    let mods_now = mods_now();
     if mods_now != 0 {
         return Ok(HookDecision::Pass);
     }
