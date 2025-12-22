@@ -655,9 +655,6 @@ fn handle_buttons(hwnd: HWND, id: i32) -> LRESULT {
 }
 
 unsafe fn on_ncdestroy(hwnd: HWND) -> LRESULT {
-    #[cfg(debug_assertions)]
-    keyboard::uninstall();
-
     let p = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut AppState;
     if p.is_null() {
         return LRESULT(0);

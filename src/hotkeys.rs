@@ -16,11 +16,13 @@ pub enum HotkeyAction {
     SwitchLayout,
 }
 
-// Диапазон 1000+ чтобы не пересекаться с control ids в WM_COMMAND
-pub const HK_CONVERT_LAST_WORD_ID: i32 = 1001;
-pub const HK_PAUSE_TOGGLE_ID: i32 = 1002;
-pub const HK_CONVERT_SELECTION_ID: i32 = 1003;
-pub const HK_SWITCH_LAYOUT_ID: i32 = 1004;
+// Диапазон 20000+ чтобы не пересекаться с control ids в WM_COMMAND
+const HK_ID_BASE: i32 = 20000;
+
+pub const HK_CONVERT_LAST_WORD_ID: i32 = HK_ID_BASE + 1;
+pub const HK_PAUSE_TOGGLE_ID: i32 = HK_ID_BASE + 2;
+pub const HK_CONVERT_SELECTION_ID: i32 = HK_ID_BASE + 3;
+pub const HK_SWITCH_LAYOUT_ID: i32 = HK_ID_BASE + 4;
 
 pub fn action_from_id(id: i32) -> Option<HotkeyAction> {
     match id {
