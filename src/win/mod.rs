@@ -32,9 +32,11 @@ use crate::{
     app::{AppState, ControlId},
     config, helpers,
     hotkeys::{HotkeyAction, action_from_id, register_from_config},
-    ui,
-    ui::error_notifier::{T_CONFIG, T_UI},
-    ui_call, visuals,
+    ui::{
+        self,
+        error_notifier::{T_CONFIG, T_UI},
+    },
+    ui_call, ui_try, visuals,
 };
 
 const WM_APP_ERROR: u32 = crate::ui::error_notifier::WM_APP_ERROR;
@@ -261,11 +263,28 @@ fn apply_config_runtime(
 ) -> windows::core::Result<()> {
     state.paused = cfg.paused;
 
+    // Critical: refresh runtime hotkey matcher inputs
+    state.active_hotkey_sequences = crate::app::HotkeySequenceValues::from_config(cfg);
+
+    // Reset runtime progress to avoid stale "waiting_second" and pending-mod state
+    state.runtime_chord_capture = crate::app::RuntimeChordCapture::default();
+    state.hotkey_sequence_progress = crate::app::HotkeySequenceProgress::default();
+
+    // Legacy fields (можно будет удалить позже, сейчас оставляем чтобы не ломать контракт)
     state.active_switch_layout_sequence = cfg.hotkey_switch_layout_sequence;
     state.switch_layout_waiting_second = false;
     state.switch_layout_first_tick_ms = 0;
 
-    let _ = crate::hotkeys::register_from_config(hwnd, cfg);
+    // Registering system hotkeys can legitimately fail for modifier-only bindings
+    // so report but do not fail the whole apply.
+    ui_try!(
+        hwnd,
+        state,
+        T_CONFIG,
+        "Failed to register hotkeys",
+        crate::hotkeys::register_from_config(hwnd, cfg)
+    );
+
     Ok(())
 }
 
