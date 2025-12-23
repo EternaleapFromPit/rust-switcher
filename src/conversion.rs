@@ -32,6 +32,18 @@ const VK_DELETE_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x2E);
 const CF_UNICODETEXT_ID: u32 = 13;
 
 #[tracing::instrument(level = "trace", skip(state))]
+pub fn convert_selection_if_any(state: &mut AppState) -> bool {
+    let Some(s) = copy_selection_text_with_clipboard_restore(256) else {
+        tracing::trace!("no selection");
+        return false;
+    };
+
+    tracing::trace!(len = s.chars().count(), "selection detected");
+    convert_selection_from_text(state, s);
+    true
+}
+
+#[tracing::instrument(level = "trace", skip(state))]
 pub fn convert_last_word(state: &mut AppState) {
     let fg = unsafe { GetForegroundWindow() };
     if fg.0.is_null() {
@@ -127,34 +139,23 @@ fn convert_selection_from_text(state: &mut AppState, text: String) {
     let _ = switch_keyboard_layout();
 }
 
-#[tracing::instrument(level = "trace")]
+#[tracing::instrument(level = "trace", skip(state))]
 pub fn convert_selection(state: &mut AppState) {
     let fg = unsafe { GetForegroundWindow() };
     if fg.0.is_null() {
+        tracing::warn!("foreground window is null");
         return;
     }
 
     if !wait_shift_released(150) {
+        tracing::info!("wait_shift_released returned false");
         return;
     }
 
-    let before_seq = unsafe { GetClipboardSequenceNumber() };
-
-    if !send_ctrl_combo(VK_C_KEY) {
-        return;
-    }
-
-    if !wait_clipboard_change(before_seq, 10, 20) {
-        return;
-    }
-
-    let Some(text) = clipboard_get_unicode_text() else {
+    let Some(text) = copy_selection_text_with_clipboard_restore(256) else {
+        tracing::trace!("no selection");
         return;
     };
-
-    if text.is_empty() {
-        return;
-    }
 
     convert_selection_from_text(state, text);
 }
@@ -370,7 +371,7 @@ fn wait_shift_released(timeout_ms: u64) -> bool {
         thread::sleep(Duration::from_millis(1));
     }
 
-    true
+    false
 }
 
 fn wait_clipboard_change(before: u32, tries: usize, sleep_ms: u64) -> bool {
@@ -403,6 +404,90 @@ impl Drop for ClipboardGuard {
     }
 }
 
+use windows::Win32::System::{
+    DataExchange::{EmptyClipboard, SetClipboardData},
+    Memory::{GMEM_MOVEABLE, GlobalAlloc},
+};
+
+fn clipboard_set_unicode_text(text: &str) -> bool {
+    let _clip = match ClipboardGuard::open() {
+        Some(g) => g,
+        None => return false,
+    };
+
+    unsafe {
+        let _ = EmptyClipboard();
+
+        let mut units: Vec<u16> = text.encode_utf16().collect();
+        units.push(0);
+
+        let bytes = units.len() * 2;
+
+        let hmem = match GlobalAlloc(GMEM_MOVEABLE, bytes) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::warn!(error = ?e, "GlobalAlloc failed");
+                return false;
+            }
+        };
+
+        let ptr = GlobalLock(hmem) as *mut u16;
+        if ptr.is_null() {
+            tracing::warn!("GlobalLock returned null");
+            return false;
+        }
+
+        std::ptr::copy_nonoverlapping(units.as_ptr(), ptr, units.len());
+        let _ = GlobalUnlock(hmem);
+
+        let handle = windows::Win32::Foundation::HANDLE(hmem.0);
+        match SetClipboardData(CF_UNICODETEXT_ID, Some(handle)) {
+            Ok(_) => true,
+            Err(e) => {
+                tracing::warn!(error = ?e, "SetClipboardData failed");
+                false
+            }
+        }
+    }
+}
+
+fn copy_selection_text_with_clipboard_restore(max_chars: usize) -> Option<String> {
+    let old = clipboard_get_unicode_text();
+    let before_seq = unsafe { GetClipboardSequenceNumber() };
+
+    if !send_ctrl_combo(VK_C_KEY) {
+        tracing::trace!("Ctrl+C failed to send");
+        return None;
+    }
+
+    if !wait_clipboard_change(before_seq, 10, 20) {
+        tracing::trace!("clipboard sequence did not change");
+        return None;
+    }
+
+    let copied = clipboard_get_unicode_text().unwrap_or_default();
+
+    if let Some(old_text) = old.as_deref() {
+        let _ = clipboard_set_unicode_text(old_text);
+    }
+
+    if copied.is_empty() {
+        return None;
+    }
+
+    if copied.contains('\n') || copied.contains('\r') {
+        tracing::trace!("copied contains newline, reject");
+        return None;
+    }
+
+    let len = copied.chars().count();
+    if len > max_chars {
+        tracing::trace!(len, max_chars, "copied too long, reject");
+        return None;
+    }
+
+    Some(copied)
+}
 fn clipboard_get_unicode_text() -> Option<String> {
     let _clip = ClipboardGuard::open()?;
 

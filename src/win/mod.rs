@@ -403,14 +403,19 @@ fn on_hotkey(hwnd: HWND, wparam: WPARAM) -> LRESULT {
                 eprintln!("tray balloon failed: {:?}", e);
             }
         }
-
         HotkeyAction::ConvertLastWord => {
-            if !state.paused {
-                // строго журнал, без UIA
-                crate::conversion::convert_last_word(state);
+            if state.paused {
+                return;
             }
-        }
 
+            // 1) пробуем выделение (clipboard)
+            if crate::conversion::convert_selection_if_any(state) {
+                return;
+            }
+
+            // 2) fallback на журнал
+            crate::conversion::convert_last_word(state);
+        }
         HotkeyAction::ConvertSelection => {
             if !state.paused {
                 // строго выделение через clipboard, без UIA
