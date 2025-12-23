@@ -31,55 +31,76 @@ const VK_DELETE_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x2E);
 
 const CF_UNICODETEXT_ID: u32 = 13;
 
-pub fn convert_last_word(state: &mut AppState, _hwnd: HWND) {
+#[tracing::instrument(level = "trace", skip(state))]
+pub fn convert_last_word(state: &mut AppState) {
     let fg = unsafe { GetForegroundWindow() };
     if fg.0.is_null() {
+        tracing::warn!("foreground window is null");
         return;
     }
 
     if !wait_shift_released(150) {
+        tracing::info!("wait_shift_released returned false");
         return;
     }
 
     let delay_ms = crate::helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(100);
-    thread::sleep(Duration::from_millis(delay_ms as u64));
+    tracing::trace!(delay_ms, "sleep before convert");
+    std::thread::sleep(std::time::Duration::from_millis(delay_ms as u64));
 
     let Some((word, suffix)) = crate::input_journal::take_last_word_with_suffix() else {
+        tracing::info!("journal: no last word");
         return;
     };
+
+    let word_len = word.chars().count();
+    let suffix_len = suffix.chars().count();
+    tracing::trace!(%word, %suffix, word_len, suffix_len, "journal extracted");
+
     if word.is_empty() {
+        tracing::warn!("journal returned empty word");
         return;
     }
 
     let converted = convert_ru_en_bidirectional(&word);
+    tracing::trace!(%converted, "converted");
 
-    let delete_count = word
-        .chars()
-        .count()
-        .saturating_add(suffix.chars().count())
-        .min(4096);
+    let delete_count = word_len.saturating_add(suffix_len).min(4096);
+    tracing::info!(delete_count, "delete_count computed");
 
     let mut seq = KeySequence::new();
-    for _ in 0..delete_count {
+    for i in 0..delete_count {
         if !seq.tap(VIRTUAL_KEY(0x08)) {
+            tracing::error!(i, delete_count, "backspace tap failed");
             return;
         }
     }
+    tracing::trace!("backspaces sent");
 
     if !send_text_unicode(&converted) {
+        tracing::error!("send_text_unicode(converted) failed");
         return;
     }
-    if !suffix.is_empty() && !send_text_unicode(&suffix) {
-        return;
+    tracing::trace!("converted text sent");
+
+    if !suffix.is_empty() {
+        if !send_text_unicode(&suffix) {
+            tracing::error!("send_text_unicode(suffix) failed");
+            return;
+        }
+        tracing::trace!("suffix sent");
     }
 
-    // синтетический ввод не попадает в журнал, поэтому обновляем вручную
     crate::input_journal::push_text(&converted);
     if !suffix.is_empty() {
         crate::input_journal::push_text(&suffix);
     }
+    tracing::trace!("journal updated");
 
-    let _ = switch_keyboard_layout();
+    match switch_keyboard_layout() {
+        Ok(()) => tracing::trace!("layout switched"),
+        Err(e) => tracing::warn!(error = ?e, "layout switch failed"),
+    }
 }
 
 fn convert_selection_from_text(state: &mut AppState, text: String) {
@@ -106,7 +127,8 @@ fn convert_selection_from_text(state: &mut AppState, text: String) {
     let _ = switch_keyboard_layout();
 }
 
-pub fn convert_selection(state: &mut AppState, _hwnd: HWND) {
+#[tracing::instrument(level = "trace")]
+pub fn convert_selection(state: &mut AppState) {
     let fg = unsafe { GetForegroundWindow() };
     if fg.0.is_null() {
         return;

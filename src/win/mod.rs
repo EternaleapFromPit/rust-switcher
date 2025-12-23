@@ -273,7 +273,7 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
     match msg {
         WM_CREATE => on_create(hwnd),
         WM_COMMAND => commands::on_command(hwnd, wparam, lparam),
-        WM_HOTKEY => on_hotkey(hwnd, wparam, lparam),
+        WM_HOTKEY => on_hotkey(hwnd, wparam),
         WM_TIMER => on_timer(hwnd, wparam),
         WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
             crate::ui::colors::on_ctlcolor(wparam, lparam)
@@ -366,7 +366,7 @@ unsafe fn on_ncdestroy(hwnd: HWND) -> LRESULT {
     LRESULT(0)
 }
 
-fn on_hotkey(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
+fn on_hotkey(hwnd: HWND, wparam: WPARAM) -> LRESULT {
     let id = wparam.0 as i32;
 
     #[cfg(debug_assertions)]
@@ -407,14 +407,14 @@ fn on_hotkey(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
         HotkeyAction::ConvertLastWord => {
             if !state.paused {
                 // строго журнал, без UIA
-                crate::conversion::convert_last_word(state, hwnd);
+                crate::conversion::convert_last_word(state);
             }
         }
 
         HotkeyAction::ConvertSelection => {
             if !state.paused {
                 // строго выделение через clipboard, без UIA
-                crate::conversion::convert_selection(state, hwnd);
+                crate::conversion::convert_selection(state);
             }
         }
 
