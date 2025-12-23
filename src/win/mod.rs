@@ -405,12 +405,12 @@ fn on_hotkey(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
         }
         HotkeyAction::ConvertLastWord => {
             if !state.paused {
-                crate::conversion::convert_last_word(state, hwnd);
+                crate::conversion::convert_by_context(state, hwnd);
             }
         }
         HotkeyAction::ConvertSelection => {
             if !state.paused {
-                crate::conversion::convert_selection(state, hwnd);
+                crate::conversion::convert_by_context(state, hwnd);
             }
         }
         HotkeyAction::SwitchLayout => {

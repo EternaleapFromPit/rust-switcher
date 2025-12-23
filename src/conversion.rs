@@ -11,9 +11,9 @@ use windows::Win32::{
     },
     UI::{
         Input::KeyboardAndMouse::{
-            GetKeyboardLayout, GetKeyboardLayoutList, HKL, INPUT, INPUT_0, INPUT_KEYBOARD,
-            KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL, VK_LEFT, VK_RIGHT,
-            VK_SHIFT,
+            GetAsyncKeyState, GetKeyboardLayout, GetKeyboardLayoutList, HKL, INPUT, INPUT_0,
+            INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL,
+            VK_LEFT, VK_LSHIFT, VK_RIGHT, VK_RSHIFT, VK_SHIFT,
         },
         WindowsAndMessaging::{
             GetForegroundWindow, GetWindowThreadProcessId, PostMessageW, WM_INPUTLANGCHANGEREQUEST,
@@ -28,7 +28,31 @@ const VK_V_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
 const VK_LEFT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x25);
 const VK_RIGHT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x27);
 const VK_SHIFT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x10);
+
 const CF_UNICODETEXT_ID: u32 = 13;
+
+pub fn convert_by_context(state: &mut AppState, hwnd: HWND) {
+    let fg = unsafe { GetForegroundWindow() };
+    if fg.0.is_null() {
+        return;
+    }
+
+    if !wait_shift_released(150) {
+        return;
+    }
+
+    let before_seq = unsafe { GetClipboardSequenceNumber() };
+
+    if send_ctrl_combo(VK_C_KEY)
+        && wait_clipboard_change(before_seq, 10, 20)
+        && clipboard_get_unicode_text().is_some_and(|s| !s.is_empty())
+    {
+        convert_selection(state, hwnd);
+        return;
+    }
+
+    convert_last_word(state, hwnd);
+}
 
 pub fn convert_last_word(state: &mut AppState, hwnd: HWND) {
     unsafe {
@@ -38,21 +62,16 @@ pub fn convert_last_word(state: &mut AppState, hwnd: HWND) {
         }
     }
 
-    // Выделяем слово слева от каретки
     if !send_ctrl_shift_combo(VK_LEFT) {
         return;
     }
 
     thread::sleep(Duration::from_millis(20));
 
-    // Конвертируем выделение обычным путем
     convert_selection(state, hwnd);
 
-    // Схлопываем выделение в конец, чтобы не оставлять активное выделение
-    unsafe {
-        let _ = send_key(VK_RIGHT, false);
-        let _ = send_key(VK_RIGHT, true);
-    }
+    let _ = send_key(VK_RIGHT, false);
+    let _ = send_key(VK_RIGHT, true);
 }
 
 pub fn convert_selection(state: &mut AppState, _hwnd: HWND) {
@@ -61,6 +80,10 @@ pub fn convert_selection(state: &mut AppState, _hwnd: HWND) {
     unsafe {
         let fg = GetForegroundWindow();
         if fg.0.is_null() {
+            return;
+        }
+
+        if !wait_shift_released(150) {
             return;
         }
 
@@ -162,22 +185,55 @@ fn post_layout_change(fg: HWND, hkl: HKL) -> windows::core::Result<()> {
 }
 
 fn send_ctrl_shift_combo(vk: VIRTUAL_KEY) -> bool {
-    (unsafe { send_key(VK_CONTROL, false) })
-        && (unsafe { send_key(VK_SHIFT, false) })
-        && unsafe { send_key(vk, false) }
-        && unsafe { send_key(vk, true) }
-        && (unsafe { send_key(VK_SHIFT, true) })
-        && unsafe { send_key(VK_CONTROL, true) }
+    let mut seq = KeySequence::new();
+
+    seq.down(VK_CONTROL) && seq.down(VK_SHIFT) && seq.tap(vk)
 }
 
-unsafe fn send_ctrl_combo(vk: VIRTUAL_KEY) -> bool {
-    (unsafe { send_key(VK_CONTROL, false) })
-        && unsafe { send_key(vk, false) }
-        && unsafe { send_key(vk, true) }
-        && unsafe { send_key(VK_CONTROL, true) }
+fn send_ctrl_combo(vk: VIRTUAL_KEY) -> bool {
+    let mut seq = KeySequence::new();
+
+    if !seq.down(VK_CONTROL) {
+        return false;
+    }
+
+    seq.tap(vk)
 }
 
-unsafe fn send_key(vk: VIRTUAL_KEY, key_up: bool) -> bool {
+struct KeySequence {
+    pressed: Vec<VIRTUAL_KEY>,
+}
+
+impl KeySequence {
+    fn new() -> Self {
+        Self {
+            pressed: Vec::new(),
+        }
+    }
+
+    fn down(&mut self, vk: VIRTUAL_KEY) -> bool {
+        if send_key(vk, false) {
+            self.pressed.push(vk);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn tap(&mut self, vk: VIRTUAL_KEY) -> bool {
+        send_key(vk, false) && send_key(vk, true)
+    }
+}
+
+impl Drop for KeySequence {
+    fn drop(&mut self) {
+        for vk in self.pressed.drain(..).rev() {
+            let _ = send_key(vk, true);
+        }
+    }
+}
+
+fn send_key(vk: VIRTUAL_KEY, key_up: bool) -> bool {
     let input = INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
@@ -195,38 +251,53 @@ unsafe fn send_key(vk: VIRTUAL_KEY, key_up: bool) -> bool {
         },
     };
 
-    (unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) }) != 0
+    let sent = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
+    sent != 0
 }
 
-unsafe fn reselect_last_inserted_text_utf16_units(units: usize) -> bool {
+fn reselect_last_inserted_text_utf16_units(units: usize) -> bool {
     if units == 0 {
         return true;
     }
 
     let units = units.min(4096);
 
-    // Move caret to start of inserted text (no selection)
+    let mut seq = KeySequence::new();
+
     for _ in 0..units {
-        if !(unsafe { send_key(VK_LEFT_KEY, false) && send_key(VK_LEFT_KEY, true) }) {
+        if !seq.tap(VK_LEFT_KEY) {
             return false;
         }
     }
 
-    // Select forward so that active end is on the right (caret ends at the end)
-    if !unsafe { send_key(VK_SHIFT_KEY, false) } {
+    if !seq.down(VK_SHIFT_KEY) {
         return false;
     }
 
-    let mut ok = true;
     for _ in 0..units {
-        if !(unsafe { send_key(VK_RIGHT_KEY, false) && send_key(VK_RIGHT_KEY, true) }) {
-            ok = false;
-            break;
+        if !seq.tap(VK_RIGHT_KEY) {
+            return false;
         }
     }
 
-    let _ = unsafe { send_key(VK_SHIFT_KEY, true) };
-    ok
+    true
+}
+
+fn wait_shift_released(timeout_ms: u64) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
+
+    while std::time::Instant::now() < deadline {
+        let l = unsafe { GetAsyncKeyState(VK_LSHIFT.0 as i32) } as u16;
+        let r = unsafe { GetAsyncKeyState(VK_RSHIFT.0 as i32) } as u16;
+
+        if (l & 0x8000) == 0 && (r & 0x8000) == 0 {
+            return true;
+        }
+
+        thread::sleep(Duration::from_millis(1));
+    }
+
+    true
 }
 
 fn wait_clipboard_change(before: u32, tries: usize, sleep_ms: u64) -> bool {
