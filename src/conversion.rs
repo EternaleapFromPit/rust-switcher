@@ -1,33 +1,23 @@
-use std::{ptr::null_mut, sync::Once, thread, time::Duration};
+use std::{ptr::null_mut, thread, time::Duration};
 
-use windows::{
-    Win32::{
-        Foundation::{HGLOBAL, HWND, LPARAM, WPARAM},
-        System::{
-            Com::{
-                CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-            },
-            DataExchange::{
-                CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, OpenClipboard,
-            },
-            Memory::{GlobalLock, GlobalUnlock},
+use windows::Win32::{
+    Foundation::{HGLOBAL, HWND, LPARAM, WPARAM},
+    System::{
+        DataExchange::{
+            CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, OpenClipboard,
         },
-        UI::{
-            Accessibility::{
-                CUIAutomation, IUIAutomation, IUIAutomationTextPattern, UIA_TextPatternId,
-            },
-            Input::KeyboardAndMouse::{
-                GetAsyncKeyState, GetKeyboardLayout, GetKeyboardLayoutList, HKL, INPUT, INPUT_0,
-                INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL,
-                VK_LSHIFT, VK_RSHIFT,
-            },
-            WindowsAndMessaging::{
-                GetForegroundWindow, GetWindowThreadProcessId, PostMessageW,
-                WM_INPUTLANGCHANGEREQUEST,
-            },
+        Memory::{GlobalLock, GlobalUnlock},
+    },
+    UI::{
+        Input::KeyboardAndMouse::{
+            GetAsyncKeyState, GetKeyboardLayout, GetKeyboardLayoutList, HKL, INPUT, INPUT_0,
+            INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL,
+            VK_LSHIFT, VK_RSHIFT,
+        },
+        WindowsAndMessaging::{
+            GetForegroundWindow, GetWindowThreadProcessId, PostMessageW, WM_INPUTLANGCHANGEREQUEST,
         },
     },
-    core::BSTR,
 };
 
 use crate::app::AppState;
@@ -41,74 +31,7 @@ const VK_DELETE_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x2E);
 
 const CF_UNICODETEXT_ID: u32 = 13;
 
-static COM_INIT: Once = Once::new();
-
-enum UiaSelection {
-    NoSelection,
-    Text(String),
-    HasSelectionButTextUnavailable,
-    Unavailable,
-}
-
-fn uia_get_selection() -> UiaSelection {
-    ensure_com_initialized();
-
-    let uia: IUIAutomation =
-        match unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.ok() {
-            Some(v) => v,
-            None => return UiaSelection::Unavailable,
-        };
-
-    let focused = match unsafe { uia.GetFocusedElement() }.ok() {
-        Some(v) => v,
-        None => return UiaSelection::Unavailable,
-    };
-
-    let tp: IUIAutomationTextPattern =
-        match unsafe { focused.GetCurrentPatternAs(UIA_TextPatternId) }.ok() {
-            Some(v) => v,
-            None => return UiaSelection::Unavailable,
-        };
-
-    let ranges = match unsafe { tp.GetSelection() }.ok() {
-        Some(v) => v,
-        None => return UiaSelection::Unavailable,
-    };
-
-    let len = match unsafe { ranges.Length() }.ok() {
-        Some(v) => v,
-        None => return UiaSelection::Unavailable,
-    };
-
-    if len <= 0 {
-        return UiaSelection::NoSelection;
-    }
-
-    let range = match unsafe { ranges.GetElement(0) }.ok() {
-        Some(v) => v,
-        None => return UiaSelection::HasSelectionButTextUnavailable,
-    };
-
-    let b: BSTR = match unsafe { range.GetText(-1) }.ok() {
-        Some(v) => v,
-        None => return UiaSelection::HasSelectionButTextUnavailable,
-    };
-
-    let s = b.to_string();
-    if s.is_empty() {
-        UiaSelection::HasSelectionButTextUnavailable
-    } else {
-        UiaSelection::Text(s)
-    }
-}
-
-fn ensure_com_initialized() {
-    COM_INIT.call_once(|| unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-    });
-}
-
-pub fn convert_by_context(state: &mut AppState, hwnd: HWND) {
+pub fn convert_last_word(state: &mut AppState, _hwnd: HWND) {
     let fg = unsafe { GetForegroundWindow() };
     if fg.0.is_null() {
         return;
@@ -118,21 +41,10 @@ pub fn convert_by_context(state: &mut AppState, hwnd: HWND) {
         return;
     }
 
-    match uia_get_selection() {
-        UiaSelection::Text(text) => {
-            convert_selection_from_text(state, text);
-        }
-        UiaSelection::HasSelectionButTextUnavailable => {
-            convert_selection(state, hwnd);
-        }
-        UiaSelection::NoSelection | UiaSelection::Unavailable => {
-            convert_last_word(state, hwnd);
-        }
-    }
-}
+    let delay_ms = crate::helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(100);
+    thread::sleep(Duration::from_millis(delay_ms as u64));
 
-pub fn convert_last_word(_state: &mut AppState, _hwnd: HWND) {
-    let Some(word) = crate::input_journal::take_last_word() else {
+    let Some((word, suffix)) = crate::input_journal::take_last_word_with_suffix() else {
         return;
     };
     if word.is_empty() {
@@ -141,9 +53,14 @@ pub fn convert_last_word(_state: &mut AppState, _hwnd: HWND) {
 
     let converted = convert_ru_en_bidirectional(&word);
 
-    let mut seq = KeySequence::new();
+    let delete_count = word
+        .chars()
+        .count()
+        .saturating_add(suffix.chars().count())
+        .min(4096);
 
-    for _ in 0..word.chars().count().min(4096) {
+    let mut seq = KeySequence::new();
+    for _ in 0..delete_count {
         if !seq.tap(VIRTUAL_KEY(0x08)) {
             return;
         }
@@ -151,6 +68,15 @@ pub fn convert_last_word(_state: &mut AppState, _hwnd: HWND) {
 
     if !send_text_unicode(&converted) {
         return;
+    }
+    if !suffix.is_empty() && !send_text_unicode(&suffix) {
+        return;
+    }
+
+    // синтетический ввод не попадает в журнал, поэтому обновляем вручную
+    crate::input_journal::push_text(&converted);
+    if !suffix.is_empty() {
+        crate::input_journal::push_text(&suffix);
     }
 
     let _ = switch_keyboard_layout();

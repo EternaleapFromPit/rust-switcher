@@ -403,16 +403,21 @@ fn on_hotkey(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
                 eprintln!("tray balloon failed: {:?}", e);
             }
         }
+
         HotkeyAction::ConvertLastWord => {
             if !state.paused {
-                crate::conversion::convert_by_context(state, hwnd);
+                // строго журнал, без UIA
+                crate::conversion::convert_last_word(state, hwnd);
             }
         }
+
         HotkeyAction::ConvertSelection => {
             if !state.paused {
-                crate::conversion::convert_by_context(state, hwnd);
+                // строго выделение через clipboard, без UIA
+                crate::conversion::convert_selection(state, hwnd);
             }
         }
+
         HotkeyAction::SwitchLayout => {
             if !state.paused {
                 let _ = crate::conversion::switch_keyboard_layout();

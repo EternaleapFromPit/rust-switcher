@@ -50,35 +50,6 @@ impl InputJournal {
     fn backspace(&mut self) {
         let _ = self.buf.pop_back();
     }
-
-    fn take_last_word(&mut self) -> Option<String> {
-        while matches!(self.buf.back(), Some(ch) if ch.is_whitespace()) {
-            let _ = self.buf.pop_back();
-        }
-
-        let mut n = 0usize;
-        for ch in self.buf.iter().rev() {
-            if is_word_char(*ch) {
-                n += 1;
-            } else {
-                break;
-            }
-        }
-
-        if n == 0 {
-            return None;
-        }
-
-        let mut out = Vec::with_capacity(n);
-        for _ in 0..n {
-            if let Some(ch) = self.buf.pop_back() {
-                out.push(ch);
-            }
-        }
-
-        out.reverse();
-        Some(out.into_iter().collect())
-    }
 }
 
 fn is_word_char(ch: char) -> bool {
@@ -176,6 +147,43 @@ pub fn record_keydown(kb: &KBDLLHOOKSTRUCT, vk: u32) {
     }
 }
 
-pub fn take_last_word() -> Option<String> {
-    journal().lock().ok().and_then(|mut j| j.take_last_word())
+pub fn take_last_word_with_suffix() -> Option<(String, String)> {
+    let Ok(mut j) = journal().lock() else {
+        return None;
+    };
+
+    let mut suffix: Vec<char> = Vec::new();
+    while let Some(&ch) = j.buf.back() {
+        if is_word_char(ch) {
+            break;
+        }
+        suffix.push(j.buf.pop_back()?);
+    }
+
+    let mut word: Vec<char> = Vec::new();
+    while let Some(&ch) = j.buf.back() {
+        if !is_word_char(ch) {
+            break;
+        }
+        word.push(j.buf.pop_back()?);
+    }
+
+    if word.is_empty() {
+        // если в конце были только разделители, вернем их обратно
+        while let Some(ch) = suffix.pop() {
+            j.buf.push_back(ch);
+        }
+        return None;
+    }
+
+    word.reverse();
+    suffix.reverse();
+
+    Some((word.into_iter().collect(), suffix.into_iter().collect()))
+}
+
+pub fn push_text(s: &str) {
+    if let Ok(mut j) = journal().lock() {
+        j.push_str(s);
+    }
 }
