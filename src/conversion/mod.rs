@@ -1,15 +1,14 @@
+mod clipboard;
+use clipboard as clip;
+
 mod mapping;
+
 use std::{ptr::null_mut, thread, time::Duration};
 
 use mapping::convert_ru_en_bidirectional;
 use windows::Win32::{
-    Foundation::{HGLOBAL, HWND, LPARAM, WPARAM},
-    System::{
-        DataExchange::{
-            CloseClipboard, GetClipboardData, GetClipboardSequenceNumber, OpenClipboard,
-        },
-        Memory::{GlobalLock, GlobalUnlock},
-    },
+    Foundation::{HWND, LPARAM, WPARAM},
+    System::DataExchange::GetClipboardSequenceNumber,
     UI::{
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, GetKeyboardLayout, GetKeyboardLayoutList, HKL, INPUT, INPUT_0,
@@ -29,8 +28,6 @@ const VK_LEFT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x25);
 const VK_RIGHT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x27);
 const VK_SHIFT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x10);
 const VK_DELETE_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x2E);
-
-const CF_UNICODETEXT_ID: u32 = 13;
 
 #[tracing::instrument(level = "trace", skip(state))]
 pub fn convert_selection_if_any(state: &mut AppState) -> bool {
@@ -375,85 +372,8 @@ fn wait_shift_released(timeout_ms: u64) -> bool {
     false
 }
 
-fn wait_clipboard_change(before: u32, tries: usize, sleep_ms: u64) -> bool {
-    for _ in 0..tries {
-        let now = unsafe { GetClipboardSequenceNumber() };
-        if now != before {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(sleep_ms));
-    }
-    false
-}
-
-struct ClipboardGuard;
-
-impl ClipboardGuard {
-    fn open() -> Option<Self> {
-        unsafe {
-            OpenClipboard(None).ok()?;
-        }
-        Some(Self)
-    }
-}
-
-impl Drop for ClipboardGuard {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseClipboard();
-        }
-    }
-}
-
-use windows::Win32::System::{
-    DataExchange::{EmptyClipboard, SetClipboardData},
-    Memory::{GMEM_MOVEABLE, GlobalAlloc},
-};
-
-fn clipboard_set_unicode_text(text: &str) -> bool {
-    let _clip = match ClipboardGuard::open() {
-        Some(g) => g,
-        None => return false,
-    };
-
-    unsafe {
-        let _ = EmptyClipboard();
-
-        let mut units: Vec<u16> = text.encode_utf16().collect();
-        units.push(0);
-
-        let bytes = units.len() * 2;
-
-        let hmem = match GlobalAlloc(GMEM_MOVEABLE, bytes) {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!(error = ?e, "GlobalAlloc failed");
-                return false;
-            }
-        };
-
-        let ptr = GlobalLock(hmem) as *mut u16;
-        if ptr.is_null() {
-            tracing::warn!("GlobalLock returned null");
-            return false;
-        }
-
-        std::ptr::copy_nonoverlapping(units.as_ptr(), ptr, units.len());
-        let _ = GlobalUnlock(hmem);
-
-        let handle = windows::Win32::Foundation::HANDLE(hmem.0);
-        match SetClipboardData(CF_UNICODETEXT_ID, Some(handle)) {
-            Ok(_) => true,
-            Err(e) => {
-                tracing::warn!(error = ?e, "SetClipboardData failed");
-                false
-            }
-        }
-    }
-}
-
 fn copy_selection_text_with_clipboard_restore(max_chars: usize) -> Option<String> {
-    let old = clipboard_get_unicode_text();
+    let old = clip::get_unicode_text();
     let before_seq = unsafe { GetClipboardSequenceNumber() };
 
     if !send_ctrl_combo(VK_C_KEY) {
@@ -461,15 +381,15 @@ fn copy_selection_text_with_clipboard_restore(max_chars: usize) -> Option<String
         return None;
     }
 
-    if !wait_clipboard_change(before_seq, 10, 20) {
+    if !clip::wait_change(before_seq, 10, 20) {
         tracing::trace!("clipboard sequence did not change");
         return None;
     }
 
-    let copied = clipboard_get_unicode_text().unwrap_or_default();
+    let copied = clip::get_unicode_text().unwrap_or_default();
 
     if let Some(old_text) = old.as_deref() {
-        let _ = clipboard_set_unicode_text(old_text);
+        let _ = clip::set_unicode_text(old_text);
     }
 
     if copied.is_empty() {
@@ -488,31 +408,4 @@ fn copy_selection_text_with_clipboard_restore(max_chars: usize) -> Option<String
     }
 
     Some(copied)
-}
-fn clipboard_get_unicode_text() -> Option<String> {
-    let _clip = ClipboardGuard::open()?;
-
-    unsafe {
-        let handle = GetClipboardData(CF_UNICODETEXT_ID).ok()?;
-        if handle.0.is_null() {
-            return None;
-        }
-
-        let hglobal = HGLOBAL(handle.0);
-        let ptr = GlobalLock(hglobal) as *const u16;
-        if ptr.is_null() {
-            return None;
-        }
-
-        let mut len = 0usize;
-        while *ptr.add(len) != 0 {
-            len += 1;
-        }
-
-        let slice = std::slice::from_raw_parts(ptr, len);
-        let text = String::from_utf16_lossy(slice);
-
-        let _ = GlobalUnlock(hglobal);
-        Some(text)
-    }
 }
