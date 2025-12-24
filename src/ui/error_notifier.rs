@@ -17,18 +17,46 @@ pub const T_UI: &str = "UI";
 /// Standard error title tag for configuration related messages.
 pub const T_CONFIG: &str = "Config";
 
+/// Drains one queued error and presents it to the user.
+///
+/// Presentation strategy:
+/// - primary: tray balloon notification
+/// - fallback: `MessageBoxW` if the tray balloon fails
+///
+/// This function must be called on the UI thread.
+pub fn drain_one_and_present(hwnd: HWND, state: &mut AppState) {
+    use windows::{
+        Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW},
+        core::HSTRING,
+    };
+
+    let Some(err) = drain_one(state) else {
+        return;
+    };
+
+    let show_message_box = |title: &str, text: &str| unsafe {
+        let _ = MessageBoxW(
+            Some(hwnd),
+            &HSTRING::from(text),
+            &HSTRING::from(title),
+            MB_OK | MB_ICONERROR,
+        );
+    };
+
+    crate::tray::balloon_error(hwnd, &err.title, &err.user_text)
+        .inspect_err(|_| show_message_box(&err.title, &err.user_text))
+        .ok();
+}
+
 /// Enqueues a UI error into `state.errors` and schedules UI processing via `WM_APP_ERROR`.
 ///
-/// This function does not show any UI itself. It only:
-/// 1) stores an error payload in the state queue
-/// 2) posts `WM_APP_ERROR` to the target window, letting the window procedure handle display
+/// Behavior:
+/// - pushes a new `UiError` into the queue
+/// - posts `WM_APP_ERROR` to the window to trigger UI side presentation
 ///
-/// Rationale:
-/// Posting a message decouples error production from error presentation and keeps all
-/// UI operations inside the window message loop.
-///
-/// Safety:
-/// This function calls Win32 `PostMessageW`. The `hwnd` must be a valid window handle.
+/// Deduplication:
+/// If the last queued error has the same `title` and `user_text`, the new one is dropped.
+/// This prevents UI spam for repeating failures.
 pub fn push(
     hwnd: HWND,
     state: &mut AppState,
@@ -36,6 +64,13 @@ pub fn push(
     user_text: &str,
     err: &windows::core::Error,
 ) {
+    if let Some(last) = state.errors.back()
+        && last.title == title
+        && last.user_text == user_text
+    {
+        return;
+    }
+
     let debug_text = format!("{:?}", err);
 
     state.errors.push_back(UiError {
@@ -45,7 +80,10 @@ pub fn push(
     });
 
     unsafe {
-        let _ = PostMessageW(Some(hwnd), WM_APP_ERROR, WPARAM(0), LPARAM(0));
+        if let Err(e) = PostMessageW(Some(hwnd), WM_APP_ERROR, WPARAM(0), LPARAM(0)) {
+            #[cfg(debug_assertions)]
+            tracing::warn!(error=?e, "PostMessageW(WM_APP_ERROR) failed");
+        }
     }
 }
 

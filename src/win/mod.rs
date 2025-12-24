@@ -40,7 +40,7 @@ use crate::{
     hotkeys::{HotkeyAction, action_from_id, register_from_config},
     ui::{
         self,
-        error_notifier::{T_CONFIG, T_UI},
+        error_notifier::{T_CONFIG, T_UI, drain_one_and_present},
     },
     ui_call, ui_try, visuals,
 };
@@ -496,40 +496,12 @@ fn on_hotkey(hwnd: HWND, wparam: WPARAM) -> LRESULT {
     LRESULT(0)
 }
 
-/// Handles `WM_APP_ERROR` by presenting the next queued error to the user.
-///
-/// This function is the UI boundary of the error notifier pipeline:
-/// - producers call `error_notifier::push`, which enqueues `UiError` into `AppState::errors`
-///   and posts `WM_APP_ERROR` to the window
-/// - the window procedure calls `on_app_error` when it receives `WM_APP_ERROR`
-/// - this handler drains exactly one error and shows it to the user
-///
-/// Presentation strategy:
-/// - primary: tray balloon notification
-/// - fallback: `MessageBoxW` if the tray balloon fails
+/// Handles `WM_APP_ERROR` by draining and presenting a single queued UI error.
 ///
 /// Returns `LRESULT(0)` to satisfy the window procedure contract.
 fn on_app_error(hwnd: HWND) -> LRESULT {
-    use windows::{
-        Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW},
-        core::HSTRING,
-    };
-
-    let show_message_box = |title: &str, text: &str| unsafe {
-        let _ = MessageBoxW(
-            Some(hwnd),
-            &HSTRING::from(text),
-            &HSTRING::from(title),
-            MB_OK | MB_ICONERROR,
-        );
-    };
-
     with_state_mut_do(hwnd, |state| {
-        crate::ui::error_notifier::drain_one(state).inspect(|err| {
-            crate::tray::balloon_error(hwnd, &err.title, &err.user_text)
-                .inspect_err(|_| show_message_box(&err.title, &err.user_text))
-                .ok();
-        });
+        drain_one_and_present(hwnd, state);
     });
 
     LRESULT(0)
