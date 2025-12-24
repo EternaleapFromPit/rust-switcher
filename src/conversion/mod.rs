@@ -74,16 +74,55 @@ fn try_convert_selection_from_clipboard(
 /// otherwise `false`.
 #[tracing::instrument(level = "trace", skip(state))]
 pub fn convert_selection_if_any(state: &mut AppState) -> bool {
-    match try_convert_selection_from_clipboard(state, 256) {
-        None => {
-            tracing::trace!("no selection");
-            false
-        }
-        Some(Ok(())) => true,
-        Some(Err(e)) => {
+    match convert_selection_outcome(state, 256) {
+        ConvertOutcome::Noop => false,
+        ConvertOutcome::Ok => true,
+        ConvertOutcome::Err(e) => {
             tracing::warn!(user_text = e.user_text(), error = ?e, "selection conversion failed");
             true
         }
+    }
+}
+
+pub fn convert_selection(state: &mut AppState) {
+    let fg = unsafe { GetForegroundWindow() };
+    if fg.0.is_null() {
+        tracing::warn!("foreground window is null");
+        return;
+    }
+
+    if !wait_shift_released(150) {
+        tracing::info!("wait_shift_released returned false");
+        return;
+    }
+
+    match convert_selection_outcome(state, 256) {
+        ConvertOutcome::Noop => tracing::trace!("no selection"),
+        ConvertOutcome::Ok => {}
+        ConvertOutcome::Err(e) => {
+            tracing::warn!(user_text = e.user_text(), error = ?e, "selection conversion failed")
+        }
+    }
+}
+
+/// High level outcome of a conversion attempt.
+///
+/// This is designed for UI boundary code to decide whether to notify the user.
+#[derive(Debug)]
+enum ConvertOutcome {
+    Noop,
+    Ok,
+    Err(ConvertSelectionError),
+}
+
+/// Attempts to convert selection and returns a high level outcome.
+///
+/// This function does not perform UI safety checks.
+fn convert_selection_outcome(state: &mut AppState, max_chars: usize) -> ConvertOutcome {
+    match try_convert_selection_from_clipboard(state, max_chars) {
+        None => ConvertOutcome::Noop,
+        Some(Ok(())) => ConvertOutcome::Ok,
+        Some(Err(e)) => ConvertOutcome::Err(e),
     }
 }
 
@@ -169,32 +208,6 @@ fn reselect_with_retry(units: usize, budget: Duration, step_sleep: Duration) -> 
             }
         })
         .any(|ok| ok)
-}
-
-/// Converts the current selection, if it exists.
-///
-/// This function performs UI safety checks (foreground window and Shift state)
-/// and returns when no selection is available.
-#[tracing::instrument(level = "trace", skip(state))]
-pub fn convert_selection(state: &mut AppState) {
-    let fg = unsafe { GetForegroundWindow() };
-    if fg.0.is_null() {
-        tracing::warn!("foreground window is null");
-        return;
-    }
-
-    if !wait_shift_released(150) {
-        tracing::info!("wait_shift_released returned false");
-        return;
-    }
-
-    match try_convert_selection_from_clipboard(state, 256) {
-        None => tracing::trace!("no selection"),
-        Some(Ok(())) => {}
-        Some(Err(e)) => {
-            tracing::warn!(user_text = e.user_text(), error = ?e, "selection conversion failed")
-        }
-    }
 }
 
 /// Returns the current foreground window, or `None` if it is null.
