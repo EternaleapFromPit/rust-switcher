@@ -1,6 +1,7 @@
-name: Build Windows Binary
+name: CI (Windows)
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main, master ]
   pull_request:
@@ -10,21 +11,23 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-windows-${{ github.ref }}
+  group: ci-windows-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-windows:
+  ci-windows:
     runs-on: windows-latest
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Setup Rust from rust-toolchain.toml
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: x86_64-pc-windows-msvc
+
+      - name: Run tests
+        run: cargo test --target x86_64-pc-windows-msvc -- --nocapture
 
       - name: Build (release, locked)
         run: cargo build --release --locked --target x86_64-pc-windows-msvc
