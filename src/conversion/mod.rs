@@ -320,14 +320,8 @@ impl Drop for ClipboardRestore {
 
 /// Copies current selection via Ctrl+C, reads Unicode text from clipboard, then restores clipboard.
 ///
-/// The function relies on `GetClipboardSequenceNumber` to detect whether Ctrl+C produced
-/// a new clipboard payload.
-///
-/// Returns `None` when:
-/// - clipboard sequence number did not change after Ctrl+C
-/// - clipboard text is empty
-/// - clipboard text is multiline (contains CR or LF)
-/// - clipboard text exceeds `max_chars` measured in Unicode scalar values (`chars().count()`)
+/// Returns `None` when selection is empty, multiline, too long, or clipboard did not change.
+/// `max_chars` is counted in Unicode scalar values.
 fn copy_selection_text_with_clipboard_restore(max_chars: usize) -> Option<String> {
     let _restore = ClipboardRestore::capture();
     let before_seq = unsafe { GetClipboardSequenceNumber() };
@@ -336,7 +330,13 @@ fn copy_selection_text_with_clipboard_restore(max_chars: usize) -> Option<String
         .then(|| clip::wait_change(before_seq, 10, 20))
         .filter(|&changed| changed)
         .and_then(|_| clip::get_unicode_text())
-        .filter(|s| !s.is_empty())
-        .filter(|s| !s.contains('\n') && !s.contains('\r'))
-        .filter(|s| s.chars().count() <= max_chars)
+        .filter(|s| is_convertible_selection(s, max_chars))
+}
+
+/// Checks whether clipboard text is eligible for selection conversion.
+///
+/// Optimization:
+/// `s.chars().nth(max_chars).is_none()` stops early for long strings, unlike `chars().count()`.
+fn is_convertible_selection(s: &str, max_chars: usize) -> bool {
+    !s.is_empty() && !s.contains('\n') && !s.contains('\r') && s.chars().nth(max_chars).is_none()
 }
