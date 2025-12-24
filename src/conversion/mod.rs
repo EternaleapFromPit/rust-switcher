@@ -135,15 +135,30 @@ fn convert_selection_from_text(state: &mut AppState, text: &str) {
 
     let mut seq = KeySequence::new();
 
-    seq.tap(VK_DELETE_KEY)
-        .then_some(())
-        .and_then(|_| send_text_unicode(&converted).then_some(()))
-        .and_then(|_| {
-            thread::sleep(Duration::from_millis(20));
-            reselect_last_inserted_text_utf16_units(converted_units).then_some(())
-        });
+    let ok = seq.tap(VK_DELETE_KEY)
+        && send_text_unicode(&converted)
+        && reselect_with_retry(
+            converted_units,
+            Duration::from_millis(120),
+            Duration::from_millis(5),
+        );
 
+    let _ = ok;
     let _ = switch_keyboard_layout();
+}
+
+fn reselect_with_retry(units: usize, budget: Duration, step_sleep: Duration) -> bool {
+    let deadline = std::time::Instant::now() + budget;
+
+    loop {
+        if reselect_last_inserted_text_utf16_units(units) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(step_sleep);
+    }
 }
 
 #[tracing::instrument(level = "trace", skip(state))]
