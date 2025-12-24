@@ -2,6 +2,10 @@ mod clipboard;
 use clipboard as clip;
 
 mod input;
+mod last_word;
+
+pub use last_word::convert_last_word;
+
 mod mapping;
 
 use std::{ptr::null_mut, thread, time::Duration};
@@ -57,93 +61,6 @@ pub fn convert_selection_if_any(state: &mut AppState) -> bool {
     tracing::trace!(len = s.chars().count(), "selection detected");
     convert_selection_from_text(state, &s);
     true
-}
-
-/// Converts the last typed word using the input journal and replaces it in the active editor.
-///
-/// The function relies on `input_journal` for extracting the last word and an optional suffix
-/// (for example punctuation or spaces that should be preserved).
-///
-/// High level flow:
-/// - validate foreground window exists
-/// - wait until Shift is released to avoid interfering with selection semantics
-/// - sleep `delay_ms` to reduce races with the target application
-/// - read `(word, suffix)` from the journal
-/// - delete `word + suffix` using Backspace taps (bounded)
-/// - inject converted word and suffix as Unicode via `SendInput`
-/// - update the journal to match what was inserted
-/// - switch keyboard layout (best effort)
-#[tracing::instrument(level = "trace", skip(state))]
-pub fn convert_last_word(state: &mut AppState) {
-    let fg = unsafe { GetForegroundWindow() };
-    if fg.0.is_null() {
-        tracing::warn!("foreground window is null");
-        return;
-    }
-
-    if !wait_shift_released(150) {
-        tracing::info!("wait_shift_released returned false");
-        return;
-    }
-
-    let delay_ms = crate::helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(100);
-    tracing::trace!(delay_ms, "sleep before convert");
-    std::thread::sleep(std::time::Duration::from_millis(delay_ms as u64));
-
-    let Some((word, suffix)) = crate::input_journal::take_last_word_with_suffix() else {
-        tracing::info!("journal: no last word");
-        return;
-    };
-
-    let word_len = word.chars().count();
-    let suffix_len = suffix.chars().count();
-    tracing::trace!(%word, %suffix, word_len, suffix_len, "journal extracted");
-
-    if word.is_empty() {
-        tracing::warn!("journal returned empty word");
-        return;
-    }
-
-    let converted = convert_ru_en_bidirectional(&word);
-    tracing::trace!(%converted, "converted");
-
-    let delete_count = word_len.saturating_add(suffix_len).min(4096);
-    tracing::info!(delete_count, "delete_count computed");
-
-    let mut seq = KeySequence::new();
-    let backspace = VIRTUAL_KEY(0x08);
-
-    if let Err(i) = (0..delete_count).try_for_each(|i| seq.tap(backspace).then_some(()).ok_or(i)) {
-        tracing::error!(i, delete_count, "backspace tap failed");
-        return;
-    }
-
-    tracing::trace!("backspaces sent");
-
-    if !send_text_unicode(&converted) {
-        tracing::error!("send_text_unicode(converted) failed");
-        return;
-    }
-    tracing::trace!("converted text sent");
-
-    if !suffix.is_empty() {
-        if !send_text_unicode(&suffix) {
-            tracing::error!("send_text_unicode(suffix) failed");
-            return;
-        }
-        tracing::trace!("suffix sent");
-    }
-
-    crate::input_journal::push_text(&converted);
-    if !suffix.is_empty() {
-        crate::input_journal::push_text(&suffix);
-    }
-    tracing::trace!("journal updated");
-
-    match switch_keyboard_layout() {
-        Ok(()) => tracing::trace!("layout switched"),
-        Err(e) => tracing::warn!(error = ?e, "layout switch failed"),
-    }
 }
 
 /// Replaces currently selected text with layout converted text.
