@@ -1,5 +1,24 @@
+/// Converts text between English QWERTY and Russian ЙЦУКЕН keyboard layouts in both directions.
+///
+/// Behavior:
+/// - For each input Unicode scalar value (`char`), tries to map it as EN -> RU.
+/// - If EN -> RU mapping is not found, tries RU -> EN.
+/// - If neither mapping exists, the character is copied unchanged.
+///
+/// Mapping coverage:
+/// - Letters a-z and A-Z.
+/// - Punctuation on the same physical keys: brackets, semicolon, quote, comma, dot, backtick.
+/// - Russian letters include ё and Ё.
+/// - Curly braces `{}` and quotes `"` are produced from shifted bracket/quote keys, matching typical layouts.
+///
+/// Complexity:
+/// - O(n) over Unicode scalar values of the input string.
+///
+/// Notes:
+/// - This is a layout conversion, not a transliteration.
+/// - Non ASCII and non Russian letters are preserved as is.
 pub fn convert_ru_en_bidirectional(text: &str) -> String {
-    fn map_char(c: char) -> Option<char> {
+    fn map_char_en_to_ru(c: char) -> Option<char> {
         // EN -> RU
         #[rustfmt::skip]
         let mapped = match c {
@@ -23,7 +42,7 @@ pub fn convert_ru_en_bidirectional(text: &str) -> String {
         Some(mapped)
     }
 
-    fn map_char_reverse(c: char) -> Option<char> {
+    fn map_char_ru_to_en(c: char) -> Option<char> {
         // RU -> EN
         #[rustfmt::skip]
         let mapped = match c {
@@ -49,11 +68,11 @@ pub fn convert_ru_en_bidirectional(text: &str) -> String {
 
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
-        if let Some(m) = map_char(ch) {
+        if let Some(m) = map_char_en_to_ru(ch) {
             out.push(m);
             continue;
         }
-        if let Some(m) = map_char_reverse(ch) {
+        if let Some(m) = map_char_ru_to_en(ch) {
             out.push(m);
             continue;
         }

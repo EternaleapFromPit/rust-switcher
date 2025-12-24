@@ -1,6 +1,7 @@
 mod clipboard;
 use clipboard as clip;
 
+mod input;
 mod mapping;
 
 use std::{ptr::null_mut, thread, time::Duration};
@@ -11,8 +12,7 @@ use windows::Win32::{
     System::DataExchange::GetClipboardSequenceNumber,
     UI::{
         Input::KeyboardAndMouse::{
-            GetAsyncKeyState, GetKeyboardLayout, GetKeyboardLayoutList, HKL, INPUT, INPUT_0,
-            INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_CONTROL,
+            GetAsyncKeyState, GetKeyboardLayout, GetKeyboardLayoutList, HKL, VIRTUAL_KEY,
             VK_LSHIFT, VK_RSHIFT,
         },
         WindowsAndMessaging::{
@@ -21,12 +21,14 @@ use windows::Win32::{
     },
 };
 
-use crate::app::AppState;
+use crate::{
+    app::AppState,
+    conversion::input::{
+        KeySequence, reselect_last_inserted_text_utf16_units, send_ctrl_combo, send_text_unicode,
+    },
+};
 
 const VK_C_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x43);
-const VK_LEFT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x25);
-const VK_RIGHT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x27);
-const VK_SHIFT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x10);
 const VK_DELETE_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x2E);
 
 #[tracing::instrument(level = "trace", skip(state))]
@@ -37,7 +39,7 @@ pub fn convert_selection_if_any(state: &mut AppState) -> bool {
     };
 
     tracing::trace!(len = s.chars().count(), "selection detected");
-    convert_selection_from_text(state, s);
+    convert_selection_from_text(state, &s);
     true
 }
 
@@ -79,12 +81,14 @@ pub fn convert_last_word(state: &mut AppState) {
     tracing::info!(delete_count, "delete_count computed");
 
     let mut seq = KeySequence::new();
-    for i in 0..delete_count {
-        if !seq.tap(VIRTUAL_KEY(0x08)) {
-            tracing::error!(i, delete_count, "backspace tap failed");
-            return;
-        }
+
+    let backspace = VIRTUAL_KEY(0x08);
+
+    if let Err(i) = (0..delete_count).try_for_each(|i| seq.tap(backspace).then_some(()).ok_or(i)) {
+        tracing::error!(i, delete_count, "backspace tap failed");
+        return;
     }
+
     tracing::trace!("backspaces sent");
 
     if !send_text_unicode(&converted) {
@@ -113,27 +117,32 @@ pub fn convert_last_word(state: &mut AppState) {
     }
 }
 
-fn convert_selection_from_text(state: &mut AppState, text: String) {
+/// Replaces currently selected text with layout-converted text.
+///
+/// Implementation details:
+/// - waits `delay_ms` to avoid racing the target app
+/// - deletes selection with Delete
+/// - injects converted Unicode via SendInput
+/// - reselects inserted text (best effort)
+/// - switches keyboard layout (best effort)
+fn convert_selection_from_text(state: &mut AppState, text: &str) {
     let delay_ms = crate::helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(100);
 
-    let converted = convert_ru_en_bidirectional(&text);
+    let converted = convert_ru_en_bidirectional(text);
     let converted_units = converted.encode_utf16().count();
 
     thread::sleep(Duration::from_millis(delay_ms as u64));
 
     let mut seq = KeySequence::new();
 
-    if !seq.tap(VK_DELETE_KEY) {
-        return;
-    }
+    seq.tap(VK_DELETE_KEY)
+        .then_some(())
+        .and_then(|_| send_text_unicode(&converted).then_some(()))
+        .and_then(|_| {
+            thread::sleep(Duration::from_millis(20));
+            reselect_last_inserted_text_utf16_units(converted_units).then_some(())
+        });
 
-    if !send_text_unicode(&converted) {
-        return;
-    }
-
-    thread::sleep(Duration::from_millis(20));
-
-    let _ = reselect_last_inserted_text_utf16_units(converted_units);
     let _ = switch_keyboard_layout();
 }
 
@@ -155,7 +164,7 @@ pub fn convert_selection(state: &mut AppState) {
         return;
     };
 
-    convert_selection_from_text(state, text);
+    convert_selection_from_text(state, &text);
 }
 
 pub fn switch_keyboard_layout() -> windows::core::Result<()> {
@@ -189,23 +198,11 @@ pub fn switch_keyboard_layout() -> windows::core::Result<()> {
 }
 
 fn next_layout(layouts: &[HKL], cur: HKL) -> HKL {
-    if layouts.is_empty() {
-        return cur;
-    }
-
-    let mut it = layouts.iter().copied().cycle();
-
-    while let Some(h) = it.next() {
-        if h == cur {
-            return it.next().unwrap_or(cur);
-        }
-
-        if h == layouts[layouts.len() - 1] {
-            return layouts[0];
-        }
-    }
-
-    cur
+    layouts
+        .iter()
+        .position(|&h| h == cur)
+        .and_then(|i| layouts.get((i + 1) % layouts.len()).copied())
+        .unwrap_or(cur)
 }
 
 fn post_layout_change(fg: HWND, hkl: HKL) -> windows::core::Result<()> {
@@ -220,192 +217,62 @@ fn post_layout_change(fg: HWND, hkl: HKL) -> windows::core::Result<()> {
     Ok(())
 }
 
-fn send_ctrl_combo(vk: VIRTUAL_KEY) -> bool {
-    let mut seq = KeySequence::new();
-
-    if !seq.down(VK_CONTROL) {
-        return false;
-    }
-
-    seq.tap(vk)
-}
-
-struct KeySequence {
-    pressed: Vec<VIRTUAL_KEY>,
-}
-
-impl KeySequence {
-    fn new() -> Self {
-        Self {
-            pressed: Vec::new(),
-        }
-    }
-
-    fn down(&mut self, vk: VIRTUAL_KEY) -> bool {
-        if send_key(vk, false) {
-            self.pressed.push(vk);
-            true
-        } else {
-            false
-        }
-    }
-
-    fn tap(&mut self, vk: VIRTUAL_KEY) -> bool {
-        send_key(vk, false) && send_key(vk, true)
-    }
-}
-
-impl Drop for KeySequence {
-    fn drop(&mut self) {
-        for vk in self.pressed.drain(..).rev() {
-            let _ = send_key(vk, true);
-        }
-    }
-}
-
-fn send_text_unicode(text: &str) -> bool {
-    use windows::Win32::UI::Input::KeyboardAndMouse::KEYEVENTF_UNICODE;
-
-    let units: Vec<u16> = text.encode_utf16().collect();
-    if units.is_empty() {
-        return true;
-    }
-
-    let mut inputs = Vec::with_capacity(units.len() * 2);
-
-    for u in units {
-        inputs.push(INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: VIRTUAL_KEY(0),
-                    wScan: u,
-                    dwFlags: KEYEVENTF_UNICODE,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        });
-
-        inputs.push(INPUT {
-            r#type: INPUT_KEYBOARD,
-            Anonymous: INPUT_0 {
-                ki: KEYBDINPUT {
-                    wVk: VIRTUAL_KEY(0),
-                    wScan: u,
-                    dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
-                    time: 0,
-                    dwExtraInfo: 0,
-                },
-            },
-        });
-    }
-
-    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) } as usize;
-    sent == inputs.len()
-}
-
-fn send_key(vk: VIRTUAL_KEY, key_up: bool) -> bool {
-    let input = INPUT {
-        r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 {
-            ki: KEYBDINPUT {
-                wVk: vk,
-                wScan: 0,
-                dwFlags: if key_up {
-                    KEYEVENTF_KEYUP
-                } else {
-                    Default::default()
-                },
-                time: 0,
-                dwExtraInfo: 0,
-            },
-        },
-    };
-
-    let sent = unsafe { SendInput(&[input], std::mem::size_of::<INPUT>() as i32) };
-    sent != 0
-}
-
-fn reselect_last_inserted_text_utf16_units(units: usize) -> bool {
-    if units == 0 {
-        return true;
-    }
-
-    let units = units.min(4096);
-
-    let mut seq = KeySequence::new();
-
-    for _ in 0..units {
-        if !seq.tap(VK_LEFT_KEY) {
-            return false;
-        }
-    }
-
-    if !seq.down(VK_SHIFT_KEY) {
-        return false;
-    }
-
-    for _ in 0..units {
-        if !seq.tap(VK_RIGHT_KEY) {
-            return false;
-        }
-    }
-
-    true
-}
-
 fn wait_shift_released(timeout_ms: u64) -> bool {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
 
-    while std::time::Instant::now() < deadline {
+    std::iter::from_fn(|| {
+        let now = std::time::Instant::now();
+        (now < deadline).then_some(())
+    })
+    .any(|_| {
         let l = unsafe { GetAsyncKeyState(VK_LSHIFT.0 as i32) } as u16;
         let r = unsafe { GetAsyncKeyState(VK_RSHIFT.0 as i32) } as u16;
 
-        if (l & 0x8000) == 0 && (r & 0x8000) == 0 {
+        let released = (l & 0x8000) == 0 && (r & 0x8000) == 0;
+        if released {
             return true;
         }
 
         thread::sleep(Duration::from_millis(1));
-    }
-
-    false
+        false
+    })
 }
 
+/// RAII helper that restores clipboard text on drop.
+/// Used to guarantee clipboard restoration even on early returns.
+struct ClipboardRestore {
+    old: Option<String>,
+}
+
+impl ClipboardRestore {
+    fn capture() -> Self {
+        Self {
+            old: clip::get_unicode_text(),
+        }
+    }
+}
+
+impl Drop for ClipboardRestore {
+    fn drop(&mut self) {
+        if let Some(old_text) = self.old.as_deref() {
+            let _ = clip::set_unicode_text(old_text);
+        }
+    }
+}
+
+/// Copies current selection via Ctrl+C, reads Unicode text from clipboard, then restores clipboard.
+///
+/// Returns `None` when selection is empty, multiline, too long, or clipboard did not change.
+/// `max_chars` is counted in Unicode scalar values, not UTF-16 units.
 fn copy_selection_text_with_clipboard_restore(max_chars: usize) -> Option<String> {
-    let old = clip::get_unicode_text();
+    let _restore = ClipboardRestore::capture();
     let before_seq = unsafe { GetClipboardSequenceNumber() };
 
-    if !send_ctrl_combo(VK_C_KEY) {
-        tracing::trace!("Ctrl+C failed to send");
-        return None;
-    }
-
-    if !clip::wait_change(before_seq, 10, 20) {
-        tracing::trace!("clipboard sequence did not change");
-        return None;
-    }
-
-    let copied = clip::get_unicode_text().unwrap_or_default();
-
-    if let Some(old_text) = old.as_deref() {
-        let _ = clip::set_unicode_text(old_text);
-    }
-
-    if copied.is_empty() {
-        return None;
-    }
-
-    if copied.contains('\n') || copied.contains('\r') {
-        tracing::trace!("copied contains newline, reject");
-        return None;
-    }
-
-    let len = copied.chars().count();
-    if len > max_chars {
-        tracing::trace!(len, max_chars, "copied too long, reject");
-        return None;
-    }
-
-    Some(copied)
+    send_ctrl_combo(VK_C_KEY)
+        .then(|| clip::wait_change(before_seq, 10, 20))
+        .filter(|&changed| changed)
+        .and_then(|_| clip::get_unicode_text())
+        .filter(|s| !s.is_empty())
+        .filter(|s| !s.contains('\n') && !s.contains('\r'))
+        .filter(|s| s.chars().count() <= max_chars)
 }
