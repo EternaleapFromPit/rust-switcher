@@ -2,7 +2,7 @@ mod clipboard;
 use clipboard as clip;
 
 mod input;
-mod last_word;
+pub(crate) mod last_word;
 
 pub use last_word::convert_last_word;
 

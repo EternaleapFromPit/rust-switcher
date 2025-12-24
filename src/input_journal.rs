@@ -113,9 +113,9 @@ fn decode_typed_text(kb: &KBDLLHOOKSTRUCT, vk: VIRTUAL_KEY) -> Option<String> {
     Some(s)
 }
 
-pub fn record_keydown(kb: &KBDLLHOOKSTRUCT, vk: u32) {
+pub fn record_keydown(kb: &KBDLLHOOKSTRUCT, vk: u32) -> Option<String> {
     if kb.flags.contains(LLKHF_INJECTED) {
-        return;
+        return None;
     }
 
     let vk = VIRTUAL_KEY(vk as u16);
@@ -126,25 +126,25 @@ pub fn record_keydown(kb: &KBDLLHOOKSTRUCT, vk: u32) {
             if let Ok(mut j) = journal().lock() {
                 j.clear();
             }
-            return;
+            return None;
         }
         VK_BACK => {
             if let Ok(mut j) = journal().lock() {
                 j.backspace();
             }
-            return;
+            return None;
         }
         VK_RETURN => {
             if let Ok(mut j) = journal().lock() {
                 j.push_str("\n");
             }
-            return;
+            return Some("\n".to_string());
         }
         VK_TAB => {
             if let Ok(mut j) = journal().lock() {
                 j.push_str("\t");
             }
-            return;
+            return Some("\t".to_string());
         }
         _ => {}
     }
@@ -153,16 +153,16 @@ pub fn record_keydown(kb: &KBDLLHOOKSTRUCT, vk: u32) {
         if let Ok(mut j) = journal().lock() {
             j.clear();
         }
-        return;
+        return None;
     }
 
-    let Some(s) = decode_typed_text(kb, vk) else {
-        return;
-    };
+    let s = decode_typed_text(kb, vk)?;
 
     if let Ok(mut j) = journal().lock() {
         j.push_str(&s);
     }
+
+    Some(s)
 }
 
 pub fn take_last_word_with_suffix() -> Option<(String, String)> {
@@ -207,4 +207,37 @@ pub fn push_text(s: &str) {
     if let Ok(mut j) = journal().lock() {
         j.push_str(s);
     }
+}
+
+pub fn last_char_triggers_autoconvert() -> bool {
+    let Ok(j) = journal().lock() else {
+        return false;
+    };
+
+    let len = j.buf.len();
+    if len == 0 {
+        return false;
+    }
+
+    let last = *j.buf.back().unwrap();
+
+    // Trigger on punctuation immediately following a non-whitespace char.
+    if matches!(last, '.' | ',' | '!' | '?' | ';' | ':') {
+        if len < 2 {
+            return false;
+        }
+        let prev = j.buf[len - 2];
+        return !prev.is_whitespace();
+    }
+
+    // Trigger on the first whitespace after a non-whitespace run.
+    if last.is_whitespace() {
+        if len < 2 {
+            return false;
+        }
+        let prev = j.buf[len - 2];
+        return !prev.is_whitespace();
+    }
+
+    false
 }

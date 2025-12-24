@@ -1,4 +1,4 @@
-use std::{thread, time::Duration};
+use std::{sync::OnceLock, thread, time::Duration};
 
 use windows::Win32::UI::{
     Input::KeyboardAndMouse::VIRTUAL_KEY, WindowsAndMessaging::GetForegroundWindow,
@@ -14,23 +14,115 @@ const VK_BACKSPACE_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x08);
 const VK_LEFT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x25);
 const VK_RIGHT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x27);
 
-/// Converts the last typed word using the input journal and replaces it in the active editor.
-///
-/// Suffix policy:
-/// - if `suffix` contains `\n` or `\r`, conversion is skipped (multi line context)
-/// - if `suffix` consists only of spaces and tabs, whitespace is preserved in place:
-///   the caret is moved left over whitespace, the word is replaced, then the caret is moved back
-/// - otherwise, `word + suffix` is deleted and reinserted as `converted + suffix`
-///
-/// All UI notifications and layout switching are best effort. Failures are logged.
-#[tracing::instrument(level = "trace", skip(state))]
 pub fn convert_last_word(state: &mut AppState) {
+    convert_last_word_impl(state, true);
+}
+
+pub fn autoconvert_last_word(state: &mut AppState) {
+    use lingua::{Language, LanguageDetector, LanguageDetectorBuilder};
+
     if !foreground_window_alive() {
         tracing::warn!("foreground window is null");
         return;
     }
 
-    if !wait_shift_released(150) {
+    sleep_before_convert(state);
+
+    let Some(payload) = take_last_word_payload() else {
+        tracing::trace!("journal: no last word");
+        return;
+    };
+
+    let restore_journal = || {
+        update_journal(&payload, &payload.word);
+        tracing::trace!("autoconvert: journal restored");
+    };
+
+    if payload.suffix_has_newline {
+        restore_journal();
+        return;
+    }
+
+    if !payload.word.chars().any(|c| c.is_alphabetic()) {
+        restore_journal();
+        return;
+    }
+
+    let converted = convert_ru_en_bidirectional(&payload.word);
+    if converted == payload.word {
+        restore_journal();
+        return;
+    }
+
+    static DETECTOR: OnceLock<LanguageDetector> = OnceLock::new();
+    let detector = DETECTOR.get_or_init(|| {
+        // Больше языков - меньше ложной уверенности на мусоре.
+        LanguageDetectorBuilder::from_languages(&[
+            Language::English,
+            Language::Russian,
+            Language::German,
+            Language::French,
+            Language::Spanish,
+            Language::Italian,
+            Language::Portuguese,
+            Language::Dutch,
+            Language::Swedish,
+            Language::Polish,
+        ])
+        .with_minimum_relative_distance(0.20)
+        .build()
+    });
+
+    let orig_lang = detector.detect_language_of(&payload.word);
+    let conv_lang = detector.detect_language_of(&converted);
+
+    tracing::trace!(
+        word = %payload.word,
+        converted = %converted,
+        orig_lang = ?orig_lang,
+        conv_lang = ?conv_lang,
+        "autoconvert decision"
+    );
+
+    // Конвертируем только если исходник "не язык", а конверсия стала русским или английским.
+    if orig_lang.is_some() {
+        restore_journal();
+        return;
+    }
+
+    let Some(lang) = conv_lang else {
+        restore_journal();
+        return;
+    };
+
+    if lang != Language::English && lang != Language::Russian {
+        restore_journal();
+        return;
+    }
+
+    let mut seq = KeySequence::new();
+    if !apply_last_word_conversion(&mut seq, &payload, &converted) {
+        tracing::warn!("apply_last_word_conversion failed");
+        restore_journal();
+        return;
+    }
+
+    update_journal(&payload, &converted);
+
+    match switch_keyboard_layout() {
+        Ok(()) => tracing::trace!("layout switched (autoconvert)"),
+        Err(e) => tracing::warn!(error = ?e, "layout switch failed (autoconvert)"),
+    }
+}
+
+#[tracing::instrument(level = "trace", skip(state))]
+fn convert_last_word_impl(state: &mut AppState, switch_layout: bool) {
+    if !foreground_window_alive() {
+        tracing::warn!("foreground window is null");
+        return;
+    }
+
+    if switch_layout && !wait_shift_released(150) {
         tracing::info!("wait_shift_released returned false");
         return;
     }
@@ -58,9 +150,11 @@ pub fn convert_last_word(state: &mut AppState) {
 
     update_journal(&payload, &converted);
 
-    match switch_keyboard_layout() {
-        Ok(()) => tracing::trace!("layout switched"),
-        Err(e) => tracing::warn!(error = ?e, "layout switch failed"),
+    if switch_layout {
+        match switch_keyboard_layout() {
+            Ok(()) => tracing::trace!("layout switched"),
+            Err(e) => tracing::warn!(error = ?e, "layout switch failed"),
+        }
     }
 }
 

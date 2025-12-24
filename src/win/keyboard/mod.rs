@@ -13,7 +13,8 @@ use windows::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, WPARAM},
     System::SystemInformation::GetTickCount64,
     UI::WindowsAndMessaging::{
-        CallNextHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, SetWindowsHookExW, WH_KEYBOARD_LL,
+        CallNextHookEx, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, PostMessageW, SetWindowsHookExW,
+        WH_KEYBOARD_LL,
     },
 };
 
@@ -79,7 +80,21 @@ extern "system" fn proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     };
 
     if is_keydown_msg(msg) && matches!(decision.as_ref(), Ok(HookDecision::Pass)) {
-        crate::input_journal::record_keydown(kb, vk);
+        let typed = crate::input_journal::record_keydown(kb, vk);
+
+        if typed.is_some()
+            && crate::input_journal::last_char_triggers_autoconvert()
+            && let Some(hwnd) = main_hwnd()
+        {
+            let _ = unsafe {
+                PostMessageW(
+                    Some(hwnd),
+                    crate::ui::error_notifier::WM_APP_AUTOCONVERT,
+                    WPARAM(0),
+                    LPARAM(0),
+                )
+            };
+        }
     }
 
     match decision {

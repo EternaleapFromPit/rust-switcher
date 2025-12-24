@@ -10,6 +10,7 @@ use crate::app::{AppState, UiError};
 /// The window procedure is expected to handle this message and drain one or more
 /// items from `AppState::errors`.
 pub const WM_APP_ERROR: u32 = WM_APP + 1;
+pub const WM_APP_AUTOCONVERT: u32 = WM_APP + 2;
 
 /// Standard error title tag for UI subsystem messages.
 pub const T_UI: &str = "UI";

@@ -45,8 +45,6 @@ use crate::{
     ui_call, ui_try, visuals,
 };
 
-const WM_APP_ERROR: u32 = crate::ui::error_notifier::WM_APP_ERROR;
-
 fn set_hwnd_text(hwnd: HWND, s: &str) -> windows::core::Result<()> {
     helpers::set_edit_text(hwnd, s)
 }
@@ -291,16 +289,19 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
             crate::ui::colors::on_ctlcolor(wparam, lparam)
         }
-
         WM_DESTROY => {
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
-
         WM_NCDESTROY => unsafe { on_ncdestroy(hwnd) },
-
-        WM_APP_ERROR => on_app_error(hwnd),
-
+        crate::ui::error_notifier::WM_APP_AUTOCONVERT => {
+            with_state_mut_do(hwnd, |state| {
+                if !state.paused {
+                    crate::conversion::last_word::autoconvert_last_word(state);
+                }
+            });
+            LRESULT(0)
+        }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
