@@ -184,28 +184,41 @@ macro_rules! startup_or_return0 {
     }};
 }
 
+/// Loads config and validates it for runtime use.
+///
+/// On invalid config, this function notifies the user and falls back to defaults.
+/// This keeps the application operational even when the config file was edited manually.
+fn load_config_or_default(hwnd: HWND, state: &mut AppState) -> config::Config {
+    config::load()
+        .map_err(|e| {
+            crate::ui::error_notifier::push(
+                hwnd,
+                state,
+                T_CONFIG,
+                "Failed to load config, using defaults",
+                &io_to_win(e),
+            );
+        })
+        .ok()
+        .and_then(|cfg| match cfg.validate_hotkey_sequences() {
+            Ok(()) => Some(cfg),
+            Err(msg) => {
+                let user_text = msg.clone();
+                let source = io_to_win(std::io::Error::new(std::io::ErrorKind::InvalidInput, msg));
+                crate::ui::error_notifier::push(hwnd, state, T_CONFIG, &user_text, &source);
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
 fn on_create(hwnd: HWND) -> LRESULT {
     let mut state = Box::new(AppState::default());
 
     #[rustfmt::skip]
     startup_or_return0!(hwnd, &mut state, "Failed to create UI controls", ui::create_controls(hwnd, &mut state));
 
-    let cfg = match config::load() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            use windows::core::{Error, HRESULT};
-            let we = Error::new(HRESULT(0x80004005u32 as i32), e.to_string());
-            crate::ui::error_notifier::push(
-                hwnd,
-                &mut state,
-                "",
-                "Failed to load config, falling back to defaults",
-                &we,
-            );
-            on_app_error(hwnd);
-            config::Config::default()
-        }
-    };
+    let cfg = load_config_or_default(hwnd, state.as_mut());
 
     state.hotkey_values = crate::app::HotkeyValues::from_config(&cfg);
     state.active_hotkey_sequences = crate::app::HotkeySequenceValues::from_config(&cfg);
@@ -483,18 +496,42 @@ fn on_hotkey(hwnd: HWND, wparam: WPARAM) -> LRESULT {
     LRESULT(0)
 }
 
+/// Handles `WM_APP_ERROR` by presenting the next queued error to the user.
+///
+/// This function is the UI boundary of the error notifier pipeline:
+/// - producers call `error_notifier::push`, which enqueues `UiError` into `AppState::errors`
+///   and posts `WM_APP_ERROR` to the window
+/// - the window procedure calls `on_app_error` when it receives `WM_APP_ERROR`
+/// - this handler drains exactly one error and shows it to the user
+///
+/// Presentation strategy:
+/// - primary: tray balloon notification
+/// - fallback: `MessageBoxW` if the tray balloon fails
+///
+/// Returns `LRESULT(0)` to satisfy the window procedure contract.
 fn on_app_error(hwnd: HWND) -> LRESULT {
-    with_state_mut(hwnd, |state| {
-        if let Some(e) = crate::ui::error_notifier::drain_one(state) {
-            if let Err(_te) = crate::tray::balloon_error(hwnd, &e.title, &e.user_text) {
-                #[cfg(debug_assertions)]
-                eprintln!("tray balloon failed: {:?}", _te);
-            }
+    use windows::{
+        Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW},
+        core::HSTRING,
+    };
 
-            #[cfg(debug_assertions)]
-            eprintln!("{}: {}", e.title, e._debug_text);
-        }
+    let show_message_box = |title: &str, text: &str| unsafe {
+        let _ = MessageBoxW(
+            Some(hwnd),
+            &HSTRING::from(text),
+            &HSTRING::from(title),
+            MB_OK | MB_ICONERROR,
+        );
+    };
+
+    with_state_mut_do(hwnd, |state| {
+        crate::ui::error_notifier::drain_one(state).inspect(|err| {
+            crate::tray::balloon_error(hwnd, &err.title, &err.user_text)
+                .inspect_err(|_| show_message_box(&err.title, &err.user_text))
+                .ok();
+        });
     });
+
     LRESULT(0)
 }
 
