@@ -42,36 +42,84 @@ const VK_C_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x43);
 /// Used to remove the current selection before inserting converted text.
 const VK_DELETE_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x2E);
 
+/// Attempts to convert the current selection by reading it through the clipboard.
+///
+/// This helper performs only the clipboard based selection acquisition:
+/// - sends Ctrl+C to the foreground application
+/// - waits for `GetClipboardSequenceNumber` to change
+/// - reads Unicode text from the clipboard
+/// - restores previous clipboard contents via `ClipboardRestore`
+///
+/// Return value:
+/// - `None` if there is no eligible selection (empty, multiline, too long, or clipboard did not change)
+/// - `Some(Ok(()))` if selection was converted successfully
+/// - `Some(Err(ConvertSelectionError))` if selection was present but the conversion pipeline failed
+///
+/// Architectural note:
+/// This function does not perform UI safety checks (foreground window, modifier keys).
+/// Callers on the UI boundary should gate calls with `GetForegroundWindow` and `wait_shift_released`.
+fn try_convert_selection_from_clipboard(
+    state: &mut AppState,
+    max_chars: usize,
+) -> Option<std::result::Result<(), ConvertSelectionError>> {
+    copy_selection_text_with_clipboard_restore(max_chars).map(|s| {
+        tracing::trace!(len = s.chars().count(), "selection detected");
+        convert_selection_from_text(state, &s)
+    })
+}
+
 /// Converts the currently selected text, if there is any selection.
 ///
-/// Selection is obtained via clipboard:
-/// - sends Ctrl+C to the foreground window
-/// - waits until `GetClipboardSequenceNumber` changes
-/// - reads Unicode text from the clipboard
-/// - restores the previous clipboard text on scope exit via RAII
-///
-/// Returns `true` if a non empty selection was converted, otherwise `false`.
+/// Returns `true` if a non empty eligible selection was found (conversion attempted),
+/// otherwise `false`.
 #[tracing::instrument(level = "trace", skip(state))]
 pub fn convert_selection_if_any(state: &mut AppState) -> bool {
-    let Some(s) = copy_selection_text_with_clipboard_restore(256) else {
-        tracing::trace!("no selection");
-        return false;
-    };
+    match try_convert_selection_from_clipboard(state, 256) {
+        None => {
+            tracing::trace!("no selection");
+            false
+        }
+        Some(Ok(())) => true,
+        Some(Err(e)) => {
+            tracing::warn!(user_text = e.user_text(), error = ?e, "selection conversion failed");
+            true
+        }
+    }
+}
 
-    tracing::trace!(len = s.chars().count(), "selection detected");
-    convert_selection_from_text(state, &s);
-    true
+/// Errors that can occur while replacing the current selection with converted text.
+#[derive(Debug)]
+enum ConvertSelectionError {
+    /// Failed to send Delete to remove the current selection.
+    Delete,
+    /// Failed to inject Unicode text via `SendInput`.
+    InsertConverted,
+    /// Failed to reselect the inserted text within the retry budget.
+    Reselect,
+}
+
+impl ConvertSelectionError {
+    fn user_text(&self) -> &'static str {
+        match self {
+            Self::Delete => "Failed to delete selection",
+            Self::InsertConverted => "Failed to insert converted text",
+            Self::Reselect => "Failed to reselect inserted text",
+        }
+    }
 }
 
 /// Replaces currently selected text with layout converted text.
 ///
-/// Implementation details:
-/// - waits `delay_ms` to avoid racing the target application
-/// - deletes selection with Delete
-/// - injects converted Unicode via `SendInput`
-/// - reselects inserted text using bounded retries (best effort)
-/// - switches keyboard layout (best effort)
-fn convert_selection_from_text(state: &mut AppState, text: &str) {
+/// Returns `Ok(())` when:
+/// - Delete tap succeeded
+/// - Unicode injection succeeded
+/// - reselect succeeded within retry budget
+///
+/// Keyboard layout switching is best effort and does not affect the result.
+fn convert_selection_from_text(
+    state: &mut AppState,
+    text: &str,
+) -> Result<(), ConvertSelectionError> {
     let delay_ms = crate::helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(100);
 
     let converted = convert_ru_en_bidirectional(text);
@@ -81,16 +129,27 @@ fn convert_selection_from_text(state: &mut AppState, text: &str) {
 
     let mut seq = KeySequence::new();
 
-    let ok = seq.tap(VK_DELETE_KEY)
-        && send_text_unicode(&converted)
-        && reselect_with_retry(
-            converted_units,
-            Duration::from_millis(120),
-            Duration::from_millis(5),
-        );
+    seq.tap(VK_DELETE_KEY)
+        .then_some(())
+        .ok_or(ConvertSelectionError::Delete)?;
 
-    let _ = ok;
-    let _ = switch_keyboard_layout();
+    send_text_unicode(&converted)
+        .then_some(())
+        .ok_or(ConvertSelectionError::InsertConverted)?;
+
+    reselect_with_retry(
+        converted_units,
+        Duration::from_millis(120),
+        Duration::from_millis(5),
+    )
+    .then_some(())
+    .ok_or(ConvertSelectionError::Reselect)?;
+
+    if let Err(e) = switch_keyboard_layout() {
+        tracing::trace!(error = ?e, "layout switch failed");
+    }
+
+    Ok(())
 }
 
 /// Attempts to reselect the last inserted text using bounded retries.
@@ -118,8 +177,8 @@ fn reselect_with_retry(units: usize, budget: Duration, step_sleep: Duration) -> 
 
 /// Converts the current selection, if it exists.
 ///
-/// This is the same pipeline as `convert_selection_if_any`, but it is `()` and
-/// simply returns when there is no selection.
+/// This function performs UI safety checks (foreground window and Shift state)
+/// and returns when no selection is available.
 #[tracing::instrument(level = "trace", skip(state))]
 pub fn convert_selection(state: &mut AppState) {
     let fg = unsafe { GetForegroundWindow() };
@@ -133,12 +192,13 @@ pub fn convert_selection(state: &mut AppState) {
         return;
     }
 
-    let Some(text) = copy_selection_text_with_clipboard_restore(256) else {
-        tracing::trace!("no selection");
-        return;
-    };
-
-    convert_selection_from_text(state, &text);
+    match try_convert_selection_from_clipboard(state, 256) {
+        None => tracing::trace!("no selection"),
+        Some(Ok(())) => {}
+        Some(Err(e)) => {
+            tracing::warn!(user_text = e.user_text(), error = ?e, "selection conversion failed")
+        }
+    }
 }
 
 /// Switches the keyboard layout for the current foreground window to the next installed layout.
