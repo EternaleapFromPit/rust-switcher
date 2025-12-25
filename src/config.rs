@@ -4,7 +4,6 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_CONTROL, VK_CANCEL, VK_PAUSE};
 
 const APP_DIR: &str = "RustSwitcher";
 const CONFIG_FILE: &str = "config.json";
@@ -71,24 +70,35 @@ impl Default for Config {
             start_on_startup: false,
             show_tray_icon: false,
             delay_ms: 100,
-
-            hotkey_convert_last_word: Some(Hotkey {
-                vk: VK_PAUSE.0 as u32,
-                mods: 0,
-            }),
-            hotkey_convert_selection: Some(Hotkey {
-                vk: VK_CANCEL.0 as u32,
-                mods: MOD_CONTROL.0,
-            }),
             hotkey_switch_layout: None,
             hotkey_pause: None,
-
+            hotkey_convert_last_word : None,
+            hotkey_convert_selection : None,
             paused: false,
 
-            hotkey_convert_last_word_sequence: None,
-            hotkey_pause_sequence: None,
-            hotkey_convert_selection_sequence: None,
-            hotkey_switch_layout_sequence: None,
+            hotkey_convert_last_word_sequence: Some(HotkeySequence {
+                first: HotkeyChord { mods: 4, mods_vks: 4, vk: None },
+                second: Some(HotkeyChord { mods: 4, mods_vks: 4, vk: None }),
+                max_gap_ms: 1000,
+            }),
+
+            hotkey_pause_sequence: Some(HotkeySequence {
+                first: HotkeyChord { mods: 4, mods_vks: 12, vk: None },
+                second: None,
+                max_gap_ms: 1000,
+            }),
+
+            hotkey_convert_selection_sequence: Some(HotkeySequence {
+                first: HotkeyChord { mods: 4, mods_vks: 4, vk: None },
+                second: Some(HotkeyChord { mods: 4, mods_vks: 4, vk: None }),
+                max_gap_ms: 1000,
+            }),
+
+            hotkey_switch_layout_sequence: Some(HotkeySequence {
+                first: HotkeyChord { mods: 0, mods_vks: 0, vk: Some(20) },
+                second: None,
+                max_gap_ms: 1000,
+            }),
         }
     }
 }
