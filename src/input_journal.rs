@@ -25,6 +25,7 @@ struct InputJournal {
     cap: usize,
     buf: VecDeque<char>,
     last_token_autoconverted: bool,
+    last_fg_hwnd: isize,
 }
 
 impl InputJournal {
@@ -33,11 +34,13 @@ impl InputJournal {
             cap,
             buf: VecDeque::with_capacity(cap),
             last_token_autoconverted: false,
+            last_fg_hwnd: 0,
         }
     }
 
     fn clear(&mut self) {
         self.buf.clear();
+        self.last_token_autoconverted = false;
     }
 
     fn push_str(&mut self, s: &str) {
@@ -51,6 +54,26 @@ impl InputJournal {
 
     fn backspace(&mut self) {
         let _ = self.buf.pop_back();
+    }
+
+    fn invalidate_if_foreground_changed(&mut self) {
+        let fg = unsafe { GetForegroundWindow() };
+        let raw = fg.0 as isize;
+        if raw == 0 {
+            self.clear();
+            self.last_fg_hwnd = 0;
+            return;
+        }
+
+        if self.last_fg_hwnd == 0 {
+            self.last_fg_hwnd = raw;
+            return;
+        }
+
+        if self.last_fg_hwnd != raw {
+            self.clear();
+            self.last_fg_hwnd = raw;
+        }
     }
 }
 
@@ -132,6 +155,10 @@ fn decode_typed_text(kb: &KBDLLHOOKSTRUCT, vk: VIRTUAL_KEY) -> Option<String> {
 pub fn record_keydown(kb: &KBDLLHOOKSTRUCT, vk: u32) -> Option<String> {
     if kb.flags.contains(LLKHF_INJECTED) {
         return None;
+    }
+
+    if let Ok(mut j) = journal().lock() {
+        j.invalidate_if_foreground_changed();
     }
 
     let vk = VIRTUAL_KEY(vk as u16);
@@ -228,6 +255,12 @@ pub fn take_last_word_with_suffix() -> Option<(String, String)> {
 pub fn push_text(s: &str) {
     if let Ok(mut j) = journal().lock() {
         j.push_str(s);
+    }
+}
+
+pub fn invalidate() {
+    if let Ok(mut j) = journal().lock() {
+        j.clear();
     }
 }
 

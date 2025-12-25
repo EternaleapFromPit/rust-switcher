@@ -8,6 +8,7 @@
 mod commands;
 mod hotkey_format;
 pub(crate) mod keyboard;
+pub(crate) mod mouse;
 mod state;
 mod window;
 
@@ -228,6 +229,7 @@ fn on_create(hwnd: HWND) -> LRESULT {
     startup_or_return0!(hwnd, &mut state, "Failed to register hotkeys", register_from_config(hwnd, &cfg));
 
     keyboard::install(hwnd, state.as_mut());
+    mouse::install();
 
     init_font_and_visuals(hwnd, &mut state);
 
