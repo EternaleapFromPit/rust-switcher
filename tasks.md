@@ -20,7 +20,7 @@
 | 4 | Добавить дефолтный конфиг хоткеев | 🧱 todo | ConvertLastWord, AutoConvertPause, ConvertSelection, SwitchKeyboardLayout |
 
 ### ⌨️ Дефолтный маппинг хоткеев
-
+✅ done
 | № | Action | Hotkey |
 |:-:|:------|:------|
 | 1 | ConvertLastWord | LShift + LShift |
