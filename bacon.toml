@@ -20,6 +20,16 @@ allow_warnings = false
 background = false
 on_change_strategy = "kill_then_restart"
 
+[jobs.test-long]
+env.RUST_TEST_NOCAPTURE = "1"
+env.RUST_LOG = "trace"
+command = ["cargo", "test"]
+need_stdout = true
+allow_warnings = true
+background = false
+on_change_strategy = "kill_then_restart"
+
 [keybindings]
 d = "job:dev-long"
 r = "job:release-long"
+t = "job:test-long"
