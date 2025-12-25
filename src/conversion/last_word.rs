@@ -1,4 +1,11 @@
-use std::{sync::OnceLock, thread, time::Duration};
+use std::{
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
 use windows::Win32::UI::{
     Input::KeyboardAndMouse::VIRTUAL_KEY, WindowsAndMessaging::GetForegroundWindow,
@@ -14,17 +21,29 @@ const VK_BACKSPACE_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x08);
 const VK_LEFT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x25);
 const VK_RIGHT_KEY: VIRTUAL_KEY = VIRTUAL_KEY(0x27);
 
+const MIN_WORD_LEN: usize = 4;
+const MIN_CONVERTED_CONFIDENCE: f64 = 0.70;
+const MIN_CONFIDENCE_GAIN: f64 = 0.25;
+
+static AUTOCONVERT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
 pub fn convert_last_word(state: &mut AppState) {
     convert_last_word_impl(state, true);
 }
 
 pub fn autoconvert_last_word(state: &mut AppState) {
-    use lingua::{Language, LanguageDetector, LanguageDetectorBuilder};
-
     if !foreground_window_alive() {
         tracing::warn!("foreground window is null");
         return;
     }
+
+    let _guard = match AutoconvertGuard::try_acquire() {
+        Ok(g) => g,
+        Err(reason) => {
+            tracing::trace!(reason = %reason.as_str(), "autoconvert skip: reentry");
+            return;
+        }
+    };
 
     sleep_before_convert(state);
 
@@ -33,98 +52,327 @@ pub fn autoconvert_last_word(state: &mut AppState) {
         return;
     };
 
-    let restore_journal = || {
-        update_journal(&payload, &payload.word);
+    let mut restore = JournalRestore::new(&payload);
 
-        tracing::trace!("autoconvert: journal restored");
+    let converted = match autoconvert_candidate(&payload) {
+        Ok(v) => v,
+        Err(reason) => {
+            tracing::trace!(reason = %reason.as_str(), "autoconvert skip: candidate");
+            return;
+        }
     };
 
-    if payload.suffix_has_newline {
-        restore_journal();
+    let detector = language_detector();
+
+    if let Err(reason) = should_autoconvert_word(detector, &payload.word, &converted) {
+        tracing::trace!(reason = %reason.as_str(), "autoconvert skip: decision");
         return;
     }
 
-    if !payload.word.chars().any(|c| c.is_alphabetic()) {
-        restore_journal();
-        return;
-    }
+    tracing::trace!(word = %payload.word, converted = %converted, "autoconvert decision");
 
-    let converted = convert_ru_en_bidirectional(&payload.word);
-    if converted == payload.word {
-        restore_journal();
-        return;
-    }
-
-    static DETECTOR: OnceLock<LanguageDetector> = OnceLock::new();
-    let detector = DETECTOR.get_or_init(|| {
-        // Больше языков - меньше ложной уверенности на мусоре.
-        LanguageDetectorBuilder::from_languages(&[
-            Language::English,
-            Language::Russian,
-            Language::German,
-            Language::French,
-            Language::Spanish,
-            Language::Italian,
-            Language::Portuguese,
-            Language::Dutch,
-            Language::Swedish,
-            Language::Polish,
-        ])
-        .with_minimum_relative_distance(0.20)
-        .build()
-    });
-
-    let orig_lang = detector.detect_language_of(&payload.word);
-    let conv_lang = detector.detect_language_of(&converted);
-
-    let is_ascii_word = payload.word.chars().all(|c| c.is_ascii_alphabetic());
-
-    // Никогда не автоконвертим нормальные английские ASCII слова в кириллицу.
-    if is_ascii_word && orig_lang == Some(Language::English) {
-        restore_journal();
-        return;
-    }
-
-    tracing::trace!(
-        word = %payload.word,
-        converted = %converted,
-        orig_lang = ?orig_lang,
-        conv_lang = ?conv_lang,
-        "autoconvert decision"
-    );
-
-    // Конвертируем, если после конверсии язык стал другим и это именно English или Russian.
-    let Some(conv_lang) = conv_lang else {
-        restore_journal();
-        return;
-    };
-
-    if conv_lang != Language::English && conv_lang != Language::Russian {
-        restore_journal();
-        return;
-    }
-
-    if let Some(orig_lang) = orig_lang
-        && orig_lang == conv_lang
-    {
-        restore_journal();
-        return;
-    }
-
-    let mut seq = KeySequence::new();
-    if !apply_last_word_conversion(&mut seq, &payload, &converted) {
-        tracing::warn!("apply_last_word_conversion failed");
-        restore_journal();
+    if let Err(err) = apply_last_word_replacement(&payload, &converted) {
+        tracing::warn!(error = %err.as_str(), "autoconvert apply failed");
         return;
     }
 
     update_journal(&payload, &converted);
     crate::input_journal::mark_last_token_autoconverted();
+    restore.commit();
 
     match switch_keyboard_layout() {
         Ok(()) => tracing::trace!("layout switched (autoconvert)"),
         Err(e) => tracing::warn!(error = ?e, "layout switch failed (autoconvert)"),
     }
+}
+
+struct AutoconvertGuard;
+
+impl AutoconvertGuard {
+    fn try_acquire() -> Result<Self, SkipReason> {
+        if AUTOCONVERT_IN_PROGRESS.swap(true, Ordering::AcqRel) {
+            return Err(SkipReason::Reentry);
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for AutoconvertGuard {
+    fn drop(&mut self) {
+        AUTOCONVERT_IN_PROGRESS.store(false, Ordering::Release);
+    }
+}
+
+struct JournalRestore<'a> {
+    payload: &'a LastWordPayload,
+    committed: bool,
+}
+
+impl<'a> JournalRestore<'a> {
+    fn new(payload: &'a LastWordPayload) -> Self {
+        Self {
+            payload,
+            committed: false,
+        }
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for JournalRestore<'_> {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        update_journal(self.payload, &self.payload.word);
+        tracing::trace!("autoconvert: journal restored");
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) enum SkipReason {
+    Reentry,
+    SuffixHasNewline,
+    NotAWord,
+    NoChangeAfterConvert,
+    TooShort,
+    ScriptCheckFailed,
+    ConvertedNoVowels,
+    ConvertedConfidenceLow,
+    NotBetterEnough,
+}
+
+impl SkipReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            SkipReason::Reentry => "reentry",
+            SkipReason::SuffixHasNewline => "suffix_has_newline",
+            SkipReason::NotAWord => "not_a_word",
+            SkipReason::NoChangeAfterConvert => "no_change_after_convert",
+            SkipReason::TooShort => "too_short",
+            SkipReason::ScriptCheckFailed => "script_check_failed",
+            SkipReason::ConvertedNoVowels => "converted_no_vowels",
+            SkipReason::ConvertedConfidenceLow => "converted_confidence_low",
+            SkipReason::NotBetterEnough => "not_better_enough",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+enum ApplyError {
+    KeyInjectionFailed,
+}
+
+impl ApplyError {
+    fn as_str(self) -> &'static str {
+        match self {
+            ApplyError::KeyInjectionFailed => "key_injection_failed",
+        }
+    }
+}
+
+fn autoconvert_candidate(p: &LastWordPayload) -> Result<String, SkipReason> {
+    ensure_no_newline(p)?;
+    ensure_has_letters(&p.word)?;
+
+    let converted = convert_ru_en_bidirectional(&p.word);
+    ensure_changed(&p.word, &converted)?;
+
+    Ok(converted)
+}
+
+fn language_detector() -> &'static lingua::LanguageDetector {
+    use lingua::{Language, LanguageDetector, LanguageDetectorBuilder};
+
+    static DETECTOR: OnceLock<LanguageDetector> = OnceLock::new();
+    DETECTOR.get_or_init(|| {
+        LanguageDetectorBuilder::from_languages(&[Language::English, Language::Russian])
+            .with_minimum_relative_distance(0.20)
+            .build()
+    })
+}
+
+pub(crate) fn should_autoconvert_word(
+    detector: &lingua::LanguageDetector,
+    word: &str,
+    converted: &str,
+) -> Result<(), SkipReason> {
+    use lingua::Language;
+
+    ensure_min_len(word)?;
+    ensure_layout_pair(word, converted)?;
+
+    let w_ru = confidence(detector, word, Language::Russian);
+    let w_en = confidence(detector, word, Language::English);
+    let c_ru = confidence(detector, converted, Language::Russian);
+    let c_en = confidence(detector, converted, Language::English);
+
+    let (c_best, w_in_target, w_other) = if c_ru >= c_en {
+        (c_ru, w_ru, w_en)
+    } else {
+        (c_en, w_en, w_ru)
+    };
+
+    if c_best < MIN_CONVERTED_CONFIDENCE {
+        return Err(SkipReason::ConvertedConfidenceLow);
+    }
+
+    if c_best - w_in_target < MIN_CONFIDENCE_GAIN {
+        return Err(SkipReason::NotBetterEnough);
+    }
+
+    if w_in_target >= w_other {
+        return Err(SkipReason::NotBetterEnough);
+    }
+
+    Ok(())
+}
+
+fn confidence(detector: &lingua::LanguageDetector, text: &str, lang: lingua::Language) -> f64 {
+    detector
+        .compute_language_confidence_values(text)
+        .iter()
+        .find(|(l, _)| *l == lang)
+        .map(|(_, v)| *v)
+        .unwrap_or(0.0)
+}
+
+fn ensure_no_newline(p: &LastWordPayload) -> Result<(), SkipReason> {
+    if p.suffix_has_newline {
+        return Err(SkipReason::SuffixHasNewline);
+    }
+    Ok(())
+}
+
+fn ensure_has_letters(word: &str) -> Result<(), SkipReason> {
+    if word.chars().any(|c| c.is_alphabetic()) {
+        return Ok(());
+    }
+    Err(SkipReason::NotAWord)
+}
+
+fn ensure_changed(word: &str, converted: &str) -> Result<(), SkipReason> {
+    if word != converted {
+        return Ok(());
+    }
+    Err(SkipReason::NoChangeAfterConvert)
+}
+
+fn ensure_min_len(word: &str) -> Result<(), SkipReason> {
+    if word.chars().count() >= MIN_WORD_LEN {
+        return Ok(());
+    }
+    Err(SkipReason::TooShort)
+}
+
+fn ensure_layout_pair(word: &str, converted: &str) -> Result<(), SkipReason> {
+    let w_ascii = looks_like_ascii_layout_token(word);
+    let w_cyr = looks_like_cyrillic_word(word);
+    let c_ascii = looks_like_ascii_layout_token(converted);
+    let c_cyr = looks_like_cyrillic_word(converted);
+
+    let ok = (w_ascii && c_cyr) || (w_cyr && c_ascii);
+    if !ok {
+        return Err(SkipReason::ScriptCheckFailed);
+    }
+
+    ensure_converted_has_vowels(w_ascii, w_cyr, converted)?;
+    Ok(())
+}
+
+fn ensure_converted_has_vowels(
+    w_ascii: bool,
+    w_cyr: bool,
+    converted: &str,
+) -> Result<(), SkipReason> {
+    if w_ascii {
+        if count_cyr_vowels(converted) == 0 {
+            return Err(SkipReason::ConvertedNoVowels);
+        }
+        return Ok(());
+    }
+
+    if w_cyr {
+        if count_ascii_vowels(converted) == 0 {
+            return Err(SkipReason::ConvertedNoVowels);
+        }
+        return Ok(());
+    }
+
+    Err(SkipReason::ScriptCheckFailed)
+}
+
+fn looks_like_ascii_layout_token(s: &str) -> bool {
+    let mut has_alpha = false;
+
+    for ch in s.chars() {
+        if ch.is_ascii_alphabetic() {
+            has_alpha = true;
+            continue;
+        }
+
+        if matches!(ch, '\'' | '-' | '[' | ']' | ';' | ',' | '.' | '/') {
+            continue;
+        }
+
+        return false;
+    }
+
+    has_alpha
+}
+
+fn looks_like_cyrillic_word(s: &str) -> bool {
+    let mut has_alpha = false;
+
+    for ch in s.chars() {
+        if ch.is_alphabetic() {
+            if !is_cyrillic(ch) {
+                return false;
+            }
+            has_alpha = true;
+            continue;
+        }
+
+        if ch == '\'' || ch == '-' {
+            continue;
+        }
+
+        return false;
+    }
+
+    has_alpha
+}
+
+fn is_cyrillic(ch: char) -> bool {
+    ('\u{0400}'..='\u{04FF}').contains(&ch) || ('\u{0500}'..='\u{052F}').contains(&ch)
+}
+
+fn count_ascii_vowels(s: &str) -> usize {
+    s.chars()
+        .filter(|ch| matches!(ch.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u' | 'y'))
+        .count()
+}
+
+fn count_cyr_vowels(s: &str) -> usize {
+    s.chars()
+        .filter(|ch| {
+            let lc = ch.to_lowercase().next().unwrap_or(*ch);
+            matches!(
+                lc,
+                'а' | 'е' | 'ё' | 'и' | 'о' | 'у' | 'ы' | 'э' | 'ю' | 'я'
+            )
+        })
+        .count()
+}
+
+fn apply_last_word_replacement(p: &LastWordPayload, converted: &str) -> Result<(), ApplyError> {
+    let mut seq = KeySequence::new();
+    if apply_last_word_conversion(&mut seq, p, converted) {
+        return Ok(());
+    }
+    Err(ApplyError::KeyInjectionFailed)
 }
 
 #[tracing::instrument(level = "trace", skip(state))]
@@ -146,6 +394,8 @@ fn convert_last_word_impl(state: &mut AppState, switch_layout: bool) {
         return;
     };
 
+    let mut restore = JournalRestore::new(&payload);
+
     if payload.suffix_has_newline {
         tracing::trace!("suffix contains newline, skipping convert_last_word");
         return;
@@ -154,13 +404,13 @@ fn convert_last_word_impl(state: &mut AppState, switch_layout: bool) {
     let converted = convert_ru_en_bidirectional(&payload.word);
     tracing::trace!(%converted, "converted");
 
-    let mut seq = KeySequence::new();
-    if !apply_last_word_conversion(&mut seq, &payload, &converted) {
-        tracing::warn!("apply_last_word_conversion failed");
+    if let Err(err) = apply_last_word_replacement(&payload, &converted) {
+        tracing::warn!(error = %err.as_str(), "convert apply failed");
         return;
     }
 
     update_journal(&payload, &converted);
+    restore.commit();
 
     if switch_layout {
         match switch_keyboard_layout() {
@@ -175,16 +425,12 @@ fn foreground_window_alive() -> bool {
     !fg.0.is_null()
 }
 
-/// Sleeps for the configured `delay_ms` before injecting synthetic input.
-///
-/// This reduces races with the target application after the hotkey trigger.
 fn sleep_before_convert(state: &AppState) {
     let delay_ms = crate::helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(100);
     tracing::trace!(delay_ms, "sleep before convert");
     thread::sleep(Duration::from_millis(delay_ms as u64));
 }
 
-/// Normalized data needed for last word conversion.
 struct LastWordPayload {
     word: String,
     suffix: String,
@@ -194,15 +440,6 @@ struct LastWordPayload {
     suffix_has_newline: bool,
 }
 
-/// Extracts the last "word" and its trailing suffix from the input journal, with a small fixup:
-/// if the suffix begins with a convertible punctuation character (`?`, `/`, `,`, `.`) and the rest
-/// of the suffix contains only spaces or tabs, that punctuation is moved into the word so it gets
-/// converted together with the word during "Convert Last Word".
-///
-/// This prevents cases like `ghbdtn?` from leaving `?` unconverted when converting only the last word.
-/// Newlines in the suffix are not merged into the word.
-/// Reads `(word, suffix)` from the input journal and derives a normalized payload.
-/// Returns `None` if the journal is empty or the extracted `word` is empty.
 fn take_last_word_payload() -> Option<LastWordPayload> {
     fn is_convertible_trailing_punct(ch: char) -> bool {
         matches!(ch, '?' | '/' | ',' | '.')
@@ -213,8 +450,6 @@ fn take_last_word_payload() -> Option<LastWordPayload> {
             return None;
         }
 
-        // If suffix starts with convertible punctuation and the rest is only spaces or tabs (or empty),
-        // move that punctuation into the word so it gets converted together with the word.
         let (first, rest) = match suffix.chars().next() {
             Some(ch) if is_convertible_trailing_punct(ch) => {
                 let ch_len = ch.len_utf8();
@@ -224,6 +459,8 @@ fn take_last_word_payload() -> Option<LastWordPayload> {
         };
 
         if let Some(ch) = first
+            && !suffix.contains('\n')
+            && !suffix.contains('\r')
             && rest.chars().all(|c| c == ' ' || c == '\t')
         {
             word.push(ch);
@@ -257,9 +494,6 @@ fn take_last_word_payload() -> Option<LastWordPayload> {
     })
 }
 
-/// Applies conversion according to the suffix policy.
-///
-/// Returns `true` if all required synthetic input events were sent successfully.
 fn apply_last_word_conversion(seq: &mut KeySequence, p: &LastWordPayload, converted: &str) -> bool {
     const MAX_TAPS: usize = 4096;
 
@@ -280,7 +514,6 @@ fn apply_last_word_conversion(seq: &mut KeySequence, p: &LastWordPayload, conver
     }
 }
 
-/// Updates the input journal to match what was inserted.
 fn update_journal(p: &LastWordPayload, converted: &str) {
     crate::input_journal::push_text(converted);
     if !p.suffix.is_empty() {
@@ -289,22 +522,18 @@ fn update_journal(p: &LastWordPayload, converted: &str) {
     tracing::trace!("journal updated");
 }
 
-/// Sends Backspace taps `count` times.
 fn delete_with_backspace(seq: &mut KeySequence, count: usize) -> bool {
     repeat_tap(seq, VK_BACKSPACE_KEY, count, "backspace tap failed")
 }
 
-/// Moves caret left by sending Left Arrow taps `count` times.
 fn move_caret_left(seq: &mut KeySequence, count: usize) -> bool {
     repeat_tap(seq, VK_LEFT_KEY, count, "left arrow tap failed")
 }
 
-/// Moves caret right by sending Right Arrow taps `count` times.
 fn move_caret_right(seq: &mut KeySequence, count: usize) -> bool {
     repeat_tap(seq, VK_RIGHT_KEY, count, "right arrow tap failed")
 }
 
-/// Repeats `seq.tap(vk)` `count` times, logging the first failing iteration.
 fn repeat_tap(seq: &mut KeySequence, vk: VIRTUAL_KEY, count: usize, err_msg: &'static str) -> bool {
     (0..count)
         .try_for_each(|i| seq.tap(vk).then_some(()).ok_or(i))
