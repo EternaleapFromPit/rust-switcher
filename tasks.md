@@ -19,19 +19,14 @@
 | 3 | Добавить мини GUI по правому клику, минимум пункт Выход | 🧱 todo | Контекстное меню трея через WinAPI |
 | 4 | Добавить дефолтный конфиг хоткеев | 🧱 todo | ConvertLastWord, AutoConvertPause, ConvertSelection, SwitchKeyboardLayout |
 
-### ⌨️ Дефолтные хоткеи
+### ⌨️ Дефолтный маппинг хоткеев
 
-Порядок действий фиксированный:
-1. ConvertLastWord
-2. AutoConvertPause
-3. ConvertSelection
-4. SwitchKeyboardLayout
-
-Хоткеи по порядку:
-- LShift + LShift
-- LShift + RShift
-- LShift + LShift
-- CapsLock
+| № | Action | Hotkey |
+|:-:|:------|:------|
+| 1 | ConvertLastWord | LShift + LShift |
+| 2 | AutoConvertPause | LShift + RShift |
+| 3 | ConvertSelection | LShift + LShift |
+| 4 | SwitchKeyboardLayout | CapsLock |
 
 ---
 
@@ -47,6 +42,3 @@
 
 ---
 
-## 🖼️ Assets
-
-- `assets/overview.png`
