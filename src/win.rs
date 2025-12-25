@@ -46,6 +46,47 @@ use crate::{
     ui_call, ui_try, visuals,
 };
 
+pub trait HotkeyApi {
+    fn handle_pause_toggle(&self, hwnd: HWND, state: &mut AppState);
+}
+
+pub struct RealHotkeyApi;
+impl HotkeyApi for RealHotkeyApi {
+    fn handle_pause_toggle(&self, hwnd: HWND, state: &mut AppState) {
+        crate::win::handle_pause_toggle(hwnd, state);
+    }
+}
+
+pub trait ConversionApi {
+    fn convert_selection(&self, state: &mut AppState);
+    fn convert_last_word(&self, state: &mut AppState);
+    fn switch_keyboard_layout(&self) -> windows::core::Result<()>; 
+    fn handle_convert_smart(&self, state: &mut AppState); 
+}
+
+// Real implementation
+pub struct RealConversionApi;
+impl ConversionApi for RealConversionApi {
+    fn convert_selection(&self, state: &mut AppState) {
+        crate::conversion::convert_selection(state);
+    }
+    
+    fn convert_last_word(&self, state: &mut AppState) {
+        crate::conversion::convert_last_word(state);
+    }
+    
+    fn switch_keyboard_layout(&self) -> windows::core::Result<()> {
+        crate::conversion::switch_keyboard_layout()
+    }
+
+    fn handle_convert_smart(&self, state: &mut AppState) {
+        if crate::conversion::convert_selection_if_any(state) {
+            return;
+        }
+        self.convert_last_word(state);
+    }
+}
+
 fn set_hwnd_text(hwnd: HWND, s: &str) -> windows::core::Result<()> {
     helpers::set_edit_text(hwnd, s)
 }
@@ -282,10 +323,12 @@ pub fn run() -> Result<()> {
 /// procedure.
 pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     const WM_NCDESTROY: u32 = 0x0082;
+    let conversion_api = RealConversionApi;
+    let hotkey_api = RealHotkeyApi;
     match msg {
         WM_CREATE => on_create(hwnd),
         WM_COMMAND => commands::on_command(hwnd, wparam, lparam),
-        WM_HOTKEY => on_hotkey(hwnd, wparam),
+        WM_HOTKEY => on_hotkey(hwnd, wparam, &conversion_api, &hotkey_api),
         WM_TIMER => on_timer(hwnd, wparam),
         WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
             crate::ui::colors::on_ctlcolor(wparam, lparam)
@@ -475,14 +518,14 @@ fn handle_pause_toggle(hwnd: HWND, state: &mut AppState) {
     }
 }
 
-fn handle_convert_smart(state: &mut AppState) {
-    if crate::conversion::convert_selection_if_any(state) {
-        return;
-    }
-    crate::conversion::convert_last_word(state);
-}
 
-fn on_hotkey(hwnd: HWND, wparam: WPARAM) -> LRESULT {
+
+pub fn on_hotkey(
+    hwnd: HWND,
+    wparam: WPARAM,
+    conversion_api: &dyn ConversionApi,
+    hotkey_api: &dyn HotkeyApi,
+) -> LRESULT {
     let id = hotkey_id_from_wparam(wparam);
 
     #[cfg(debug_assertions)]
@@ -491,18 +534,18 @@ fn on_hotkey(hwnd: HWND, wparam: WPARAM) -> LRESULT {
     let Some(action) = action_from_id(id) else {
         return LRESULT(0);
     };
+    
     with_state_mut(hwnd, |state| match action {
-        HotkeyAction::PauseToggle => handle_pause_toggle(hwnd, state),
-        HotkeyAction::ConvertLastWord => handle_convert_smart(state),
-        HotkeyAction::ConvertSelection => crate::conversion::convert_selection(state),
+        HotkeyAction::PauseToggle => hotkey_api.handle_pause_toggle(hwnd, state),
+        HotkeyAction::ConvertLastWord => conversion_api.handle_convert_smart(state),
+        HotkeyAction::ConvertSelection => conversion_api.convert_selection(state),
         HotkeyAction::SwitchLayout => {
-            let _ = crate::conversion::switch_keyboard_layout();
+            let _ = conversion_api.switch_keyboard_layout();
         }
     });
 
     LRESULT(0)
 }
-
 /// Handles `WM_APP_ERROR` by draining and presenting a single queued UI error.
 ///
 /// Returns `LRESULT(0)` to satisfy the window procedure contract.
