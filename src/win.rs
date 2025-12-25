@@ -482,15 +482,28 @@ fn handle_convert_smart(state: &mut AppState) {
     crate::conversion::convert_last_word(state);
 }
 
+#[cfg(test)]
+pub(crate) fn hotkey_action_from_wparam(wparam: WPARAM) -> Option<HotkeyAction> {
+    let id = hotkey_id_from_wparam(wparam);
+    action_from_id(id)
+}
+
+#[cfg(not(test))]
+fn hotkey_action_from_wparam(wparam: WPARAM) -> Option<HotkeyAction> {
+    let id = hotkey_id_from_wparam(wparam);
+    action_from_id(id)
+}
+
 fn on_hotkey(hwnd: HWND, wparam: WPARAM) -> LRESULT {
     let id = hotkey_id_from_wparam(wparam);
 
     #[cfg(debug_assertions)]
     crate::helpers::debug_log(&format!("WM_HOTKEY id={}", id));
 
-    let Some(action) = action_from_id(id) else {
+    let Some(action) = hotkey_action_from_wparam(wparam) else {
         return LRESULT(0);
     };
+
     with_state_mut(hwnd, |state| match action {
         HotkeyAction::PauseToggle => handle_pause_toggle(hwnd, state),
         HotkeyAction::ConvertLastWord => handle_convert_smart(state),

@@ -255,11 +255,32 @@ impl ApplyError {
     }
 }
 
+fn split_trailing_convertible_punct(s: &str) -> (&str, &str) {
+    let bytes = s.as_bytes();
+    let mut i = bytes.len();
+
+    while i > 0 {
+        match bytes[i - 1] {
+            b'?' | b'/' | b',' | b'.' => i -= 1,
+            _ => break,
+        }
+    }
+
+    s.split_at(i)
+}
+
 fn autoconvert_candidate(p: &LastWordPayload) -> Result<String, SkipReason> {
     ensure_no_newline(p)?;
     ensure_has_letters(&p.word)?;
 
-    let converted = convert_ru_en_bidirectional(&p.word);
+    let (word_core, word_punct) = split_trailing_convertible_punct(&p.word);
+
+    let converted_core = convert_ru_en_bidirectional(word_core);
+
+    let mut converted = String::with_capacity(converted_core.len() + word_punct.len());
+    converted.push_str(&converted_core);
+    converted.push_str(word_punct);
+
     ensure_changed(&p.word, &converted)?;
 
     Ok(converted)
@@ -277,63 +298,97 @@ fn language_detector() -> &'static lingua::LanguageDetector {
 }
 
 fn looks_like_ascii_word(s: &str) -> bool {
-    let mut has_alpha = false;
-    for ch in s.chars() {
-        if ch.is_ascii_alphabetic() {
-            has_alpha = true;
-            continue;
-        }
-        if ch == '\'' {
-            continue;
-        }
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
         return false;
     }
-    has_alpha
+
+    let is_ascii_letter = |b: u8| b.is_ascii_uppercase() || (b'a'..=b'z').contains(&b);
+
+    let mut has_letter = false;
+
+    for i in 0..bytes.len() {
+        let b = bytes[i];
+
+        if is_ascii_letter(b) {
+            has_letter = true;
+            continue;
+        }
+
+        if b == b'\'' {
+            continue;
+        }
+
+        // Allow dot or comma only when it is between ASCII letters.
+        if (b == b'.' || b == b',')
+            && i > 0
+            && i + 1 < bytes.len()
+            && is_ascii_letter(bytes[i - 1])
+            && is_ascii_letter(bytes[i + 1])
+        {
+            continue;
+        }
+
+        return false;
+    }
+
+    has_letter
 }
 
-pub(crate) fn should_autoconvert_word(
+fn should_autoconvert_word(
     detector: &lingua::LanguageDetector,
     word: &str,
     converted: &str,
 ) -> Result<(), SkipReason> {
     use lingua::Language;
 
-    if word.chars().count() < MIN_WORD_LEN {
+    let (word_core, _word_punct) = split_trailing_convertible_punct(word);
+    let (conv_core, _conv_punct) = split_trailing_convertible_punct(converted);
+
+    if word_core.chars().count() < MIN_WORD_LEN {
         return Err(SkipReason::TooShort);
     }
 
-    let w_is_ascii = looks_like_ascii_word(word);
-    let w_is_cyr = looks_like_cyrillic_word(word);
-    let c_is_ascii = looks_like_ascii_word(converted);
-    let c_is_cyr = looks_like_cyrillic_word(converted);
+    let w_is_ascii = looks_like_ascii_word(word_core);
+    let w_is_cyr = looks_like_cyrillic_word(word_core);
+    let c_is_ascii = looks_like_ascii_word(conv_core);
+    let c_is_cyr = looks_like_cyrillic_word(conv_core);
 
     if !(w_is_ascii || w_is_cyr) || !(c_is_ascii || c_is_cyr) {
         return Err(SkipReason::ScriptCheckFailed);
     }
 
-    let w_ru = confidence(detector, word, Language::Russian);
-    let w_en = confidence(detector, word, Language::English);
-    let c_ru = confidence(detector, converted, Language::Russian);
-    let c_en = confidence(detector, converted, Language::English);
+    let w_ru = confidence(detector, word_core, Language::Russian);
+    let w_en = confidence(detector, word_core, Language::English);
+    let c_ru = confidence(detector, conv_core, Language::Russian);
+    let c_en = confidence(detector, conv_core, Language::English);
 
-    // 1) Ранний стоп: слово выглядит корректным для своей письменности.
-    // Это сознательная эвристика против автоконверта английских слов и опечаток вроде "hellp".
-    if w_is_ascii && is_plausible_english_like_token(word) {
+    if w_is_ascii && is_plausible_english_like_token(word_core) {
         return Err(SkipReason::AlreadyCorrect);
     }
-    if w_is_cyr && is_plausible_russian_like_token(word) {
+    if w_is_cyr && is_plausible_russian_like_token(word_core) {
         return Err(SkipReason::AlreadyCorrect);
     }
 
-    // 2) Цель конверта определяется по converted
-    let (c_in_target, w_in_target) = if c_ru >= c_en {
-        (c_ru, w_ru)
+    let w_best = w_ru.max(w_en);
+    let c_best = c_ru.max(c_en);
+
+    let target = if w_is_ascii {
+        Language::Russian
     } else {
-        (c_en, w_en)
+        Language::English
     };
 
-    // 3) Минимальная абсолютная уверенность в target после конверта
-    let w_best = w_ru.max(w_en);
+    let (w_in_target, c_in_target) = match target {
+        Language::Russian => (w_ru, c_ru),
+        Language::English => (w_en, c_en),
+        _ => unreachable!("only ru/en here"),
+    };
+
+    if c_best < MIN_CONVERTED_CONFIDENCE {
+        return Err(SkipReason::ConvertedConfidenceLow);
+    }
+
     let min_abs = if w_best < 0.30 {
         0.55
     } else {
@@ -343,7 +398,6 @@ pub(crate) fn should_autoconvert_word(
         return Err(SkipReason::ConvertedConfidenceLow);
     }
 
-    // 4) Нужен заметный прирост уверенности в target
     if c_in_target - w_in_target < MIN_CONFIDENCE_GAIN {
         return Err(SkipReason::NotBetterEnough);
     }
@@ -743,5 +797,63 @@ mod tests {
         let p = normalize_last_word_payload("ghbdtn".to_string(), "! ".to_string()).unwrap();
         assert_eq!(p.word, "ghbdtn");
         assert_eq!(p.suffix, "! ");
+    }
+
+    #[test]
+    fn autoconvert_regression_reported_sequence_batch() {
+        let detector = detector_ru_en();
+
+        // (token, expected_autoconvert)
+        let cases = [
+            ("ghbdtn", true),    // привет
+            ("hjyxnmyuj", true), // рончтьнго (из репорта)
+            ("gjyznyj", true),   // понятно
+            ("fdujlyj", true), // "авгодно" (ошибка/мусор, но автоконверт должен срабатывать по текущей цели)
+            ("hellp", false),  // английскоподобная опечатка, не трогать
+            ("world", false),  // корректное английское слово, не трогать
+            ("привет", false), // корректное русское слово, не трогать
+        ];
+
+        for (word, should_convert) in cases {
+            let converted = convert_ru_en_bidirectional(word);
+
+            let decision = should_autoconvert_word(&detector, word, &converted);
+            match (should_convert, decision) {
+                (true, Ok(())) => {}
+                (false, Err(_)) => {}
+                (true, Err(reason)) => {
+                    panic!(
+                        "expected autoconvert for token: {} -> {}, got Err({:?})",
+                        word, converted, reason
+                    );
+                }
+                (false, Ok(())) => {
+                    panic!(
+                        "expected skip for token: {} -> {}, got Ok(())",
+                        word, converted
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn normalize_plus_decision_converts_with_trailing_punct_and_space_suffix() {
+        let detector = detector_ru_en();
+
+        let p = normalize_last_word_payload("ghbdtn".to_string(), ",   \t".to_string()).unwrap();
+
+        assert_eq!(p.word.as_str(), "ghbdtn,");
+        assert_eq!(p.suffix.as_str(), "   \t");
+
+        let converted = convert_ru_en_bidirectional(&p.word);
+        let decision = should_autoconvert_word(&detector, &p.word, &converted);
+
+        assert!(
+            decision.is_ok(),
+            "expected autoconvert decision for normalized token: {} -> {}, got {:?}",
+            p.word,
+            converted,
+            decision
+        );
     }
 }
