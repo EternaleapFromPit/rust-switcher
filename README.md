@@ -2,8 +2,6 @@
 
 ![Screenshot](assets/screenshots/overview.png)
 
-## Русский
-
 ### Что это
 
 Rust Switcher это утилита для Windows, которая:
@@ -11,14 +9,6 @@ Rust Switcher это утилита для Windows, которая:
 - умеет конвертировать выделенный текст между RU и EN раскладками
 - умеет конвертировать последний введенный фрагмент по хоткею
 - поддерживает автоконвертацию последнего слова при наборе (экспериментально)
-
-### Ключевые возможности
-
-- Convert Selection: конвертация выделения между RU и EN
-- Convert Last Word: конвертация последнего введенного фрагмента по хоткею
-- AutoConvert: автоконвертация последнего слова на пробеле и некоторых разделителях
-- Input Journal: кольцевой буфер введенных символов для точной замены в редакторе
-- Tracing: подробные логи в файл и консоль
 
 ### Скриншот
 
@@ -51,8 +41,6 @@ Rust Switcher это утилита для Windows, которая:
 
 Проект в активной разработке. Автоконвертация является экспериментальной и будет донастраиваться.
 
-## English
-
 ### What is it
 
 Rust Switcher is a Windows utility that:
@@ -60,18 +48,6 @@ Rust Switcher is a Windows utility that:
 - converts selected text between RU and EN layouts
 - converts the last typed chunk via hotkey
 - supports experimental auto conversion on typing boundaries
-
-### Key features
-
-- Convert Selection: selection conversion between RU and EN
-- Convert Last Word: hotkey driven conversion for the last typed chunk
-- AutoConvert: auto conversion on space and some separators (experimental)
-- Input Journal: ring buffer for reliable in place replacement
-- Tracing: detailed logs to file and console
-
-### Screenshot
-
-File: `assets/screenshots/overview.png`
 
 ### Build and run
 
