@@ -139,9 +139,9 @@ pub(crate) enum SkipReason {
     NoChangeAfterConvert,
     TooShort,
     ScriptCheckFailed,
-    ConvertedNoVowels,
     ConvertedConfidenceLow,
     NotBetterEnough,
+    AlreadyCorrect,
 }
 
 impl SkipReason {
@@ -153,9 +153,9 @@ impl SkipReason {
             SkipReason::NoChangeAfterConvert => "no_change_after_convert",
             SkipReason::TooShort => "too_short",
             SkipReason::ScriptCheckFailed => "script_check_failed",
-            SkipReason::ConvertedNoVowels => "converted_no_vowels",
             SkipReason::ConvertedConfidenceLow => "converted_confidence_low",
             SkipReason::NotBetterEnough => "not_better_enough",
+            SkipReason::AlreadyCorrect => "already_correct",
         }
     }
 }
@@ -194,6 +194,59 @@ fn language_detector() -> &'static lingua::LanguageDetector {
     })
 }
 
+fn looks_like_ascii_word(s: &str) -> bool {
+    let mut has_alpha = false;
+    for ch in s.chars() {
+        if ch.is_ascii_alphabetic() {
+            has_alpha = true;
+            continue;
+        }
+        if ch == '\'' {
+            continue;
+        }
+        return false;
+    }
+    has_alpha
+}
+
+fn is_probably_correct_english_word(detector: &lingua::LanguageDetector, word: &str) -> bool {
+    use lingua::Language;
+
+    if !looks_like_ascii_word(word) {
+        return false;
+    }
+    if !has_ascii_vowel(word) {
+        return false;
+    }
+    confidence(detector, word, Language::English) >= MIN_CONVERTED_CONFIDENCE
+}
+
+fn is_probably_correct_russian_word(detector: &lingua::LanguageDetector, word: &str) -> bool {
+    use lingua::Language;
+
+    if !looks_like_cyrillic_word(word) {
+        return false;
+    }
+    if !has_cyrillic_vowel(word) {
+        return false;
+    }
+    confidence(detector, word, Language::Russian) >= MIN_CONVERTED_CONFIDENCE
+}
+
+fn has_ascii_vowel(s: &str) -> bool {
+    s.chars()
+        .any(|ch| matches!(ch.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u' | 'y'))
+}
+
+fn has_cyrillic_vowel(s: &str) -> bool {
+    s.chars().any(|ch| {
+        matches!(
+            ch.to_lowercase().next().unwrap_or(ch),
+            'а' | 'е' | 'ё' | 'и' | 'о' | 'у' | 'ы' | 'э' | 'ю' | 'я'
+        )
+    })
+}
+
 pub(crate) fn should_autoconvert_word(
     detector: &lingua::LanguageDetector,
     word: &str,
@@ -201,8 +254,22 @@ pub(crate) fn should_autoconvert_word(
 ) -> Result<(), SkipReason> {
     use lingua::Language;
 
-    ensure_min_len(word)?;
-    ensure_layout_pair(word, converted)?;
+    if word.chars().count() < MIN_WORD_LEN {
+        return Err(SkipReason::TooShort);
+    }
+
+    let w_ok = looks_like_ascii_word(word) || looks_like_cyrillic_word(word);
+    let c_ok = looks_like_ascii_word(converted) || looks_like_cyrillic_word(converted);
+    if !w_ok || !c_ok {
+        return Err(SkipReason::ScriptCheckFailed);
+    }
+
+    if is_probably_correct_english_word(detector, word) {
+        return Err(SkipReason::AlreadyCorrect);
+    }
+    if is_probably_correct_russian_word(detector, word) {
+        return Err(SkipReason::AlreadyCorrect);
+    }
 
     let w_ru = confidence(detector, word, Language::Russian);
     let w_en = confidence(detector, word, Language::English);
@@ -260,69 +327,6 @@ fn ensure_changed(word: &str, converted: &str) -> Result<(), SkipReason> {
     Err(SkipReason::NoChangeAfterConvert)
 }
 
-fn ensure_min_len(word: &str) -> Result<(), SkipReason> {
-    if word.chars().count() >= MIN_WORD_LEN {
-        return Ok(());
-    }
-    Err(SkipReason::TooShort)
-}
-
-fn ensure_layout_pair(word: &str, converted: &str) -> Result<(), SkipReason> {
-    let w_ascii = looks_like_ascii_layout_token(word);
-    let w_cyr = looks_like_cyrillic_word(word);
-    let c_ascii = looks_like_ascii_layout_token(converted);
-    let c_cyr = looks_like_cyrillic_word(converted);
-
-    let ok = (w_ascii && c_cyr) || (w_cyr && c_ascii);
-    if !ok {
-        return Err(SkipReason::ScriptCheckFailed);
-    }
-
-    ensure_converted_has_vowels(w_ascii, w_cyr, converted)?;
-    Ok(())
-}
-
-fn ensure_converted_has_vowels(
-    w_ascii: bool,
-    w_cyr: bool,
-    converted: &str,
-) -> Result<(), SkipReason> {
-    if w_ascii {
-        if count_cyr_vowels(converted) == 0 {
-            return Err(SkipReason::ConvertedNoVowels);
-        }
-        return Ok(());
-    }
-
-    if w_cyr {
-        if count_ascii_vowels(converted) == 0 {
-            return Err(SkipReason::ConvertedNoVowels);
-        }
-        return Ok(());
-    }
-
-    Err(SkipReason::ScriptCheckFailed)
-}
-
-fn looks_like_ascii_layout_token(s: &str) -> bool {
-    let mut has_alpha = false;
-
-    for ch in s.chars() {
-        if ch.is_ascii_alphabetic() {
-            has_alpha = true;
-            continue;
-        }
-
-        if matches!(ch, '\'' | '-' | '[' | ']' | ';' | ',' | '.' | '/') {
-            continue;
-        }
-
-        return false;
-    }
-
-    has_alpha
-}
-
 fn looks_like_cyrillic_word(s: &str) -> bool {
     let mut has_alpha = false;
 
@@ -347,24 +351,6 @@ fn looks_like_cyrillic_word(s: &str) -> bool {
 
 fn is_cyrillic(ch: char) -> bool {
     ('\u{0400}'..='\u{04FF}').contains(&ch) || ('\u{0500}'..='\u{052F}').contains(&ch)
-}
-
-fn count_ascii_vowels(s: &str) -> usize {
-    s.chars()
-        .filter(|ch| matches!(ch.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u' | 'y'))
-        .count()
-}
-
-fn count_cyr_vowels(s: &str) -> usize {
-    s.chars()
-        .filter(|ch| {
-            let lc = ch.to_lowercase().next().unwrap_or(*ch);
-            matches!(
-                lc,
-                'а' | 'е' | 'ё' | 'и' | 'о' | 'у' | 'ы' | 'э' | 'ю' | 'я'
-            )
-        })
-        .count()
 }
 
 fn apply_last_word_replacement(p: &LastWordPayload, converted: &str) -> Result<(), ApplyError> {
@@ -542,4 +528,89 @@ fn repeat_tap(seq: &mut KeySequence, vk: VIRTUAL_KEY, count: usize, err_msg: &'s
             tracing::error!(i, count, %err_msg);
             false
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use lingua::{Language, LanguageDetectorBuilder};
+
+    use super::*;
+
+    fn detector_ru_en() -> lingua::LanguageDetector {
+        LanguageDetectorBuilder::from_languages(&[Language::Russian, Language::English])
+            .with_minimum_relative_distance(0.20)
+            .build()
+    }
+
+    #[test]
+    fn autoconvert_does_not_touch_correct_russian_word() {
+        let detector = detector_ru_en();
+
+        let word = "привет";
+        let converted = convert_ru_en_bidirectional(word);
+        assert_eq!(converted, "ghbdtn");
+
+        let decision = should_autoconvert_word(&detector, word, &converted);
+        assert!(
+            decision.is_err(),
+            "should not autoconvert correct Russian word"
+        );
+    }
+
+    #[test]
+    fn autoconvert_converts_mistyped_russian_layout_word() {
+        let detector = detector_ru_en();
+
+        let word = "ghbdtn";
+        let converted = convert_ru_en_bidirectional(word);
+        assert_eq!(converted, "привет");
+
+        let decision = should_autoconvert_word(&detector, word, &converted);
+        assert!(
+            decision.is_ok(),
+            "should autoconvert mistyped Russian layout word"
+        );
+    }
+
+    #[test]
+    fn autoconvert_does_not_touch_correct_english_ascii_word() {
+        let detector = detector_ru_en();
+
+        let word = "world";
+        let converted = convert_ru_en_bidirectional(word);
+        assert_ne!(converted, word);
+
+        let decision = should_autoconvert_word(&detector, word, &converted);
+        assert!(
+            decision.is_err(),
+            "should not autoconvert correct English ASCII word"
+        );
+    }
+
+    #[test]
+    fn autoconvert_skips_too_short_words() {
+        let detector = detector_ru_en();
+
+        let word = "rfr"; // "как"
+        let converted = convert_ru_en_bidirectional(word);
+        assert_eq!(converted, "как");
+
+        let decision = should_autoconvert_word(&detector, word, &converted);
+        assert!(
+            decision.is_err(),
+            "must skip short words to avoid false positives"
+        );
+    }
+
+    #[test]
+    fn autoconvert_skips_mixed_or_nonword_tokens() {
+        let detector = detector_ru_en();
+
+        let word = ";tklf"; // starts with punctuation, should fail script heuristics
+        let converted = convert_ru_en_bidirectional(word);
+        assert_ne!(converted, word);
+
+        let decision = should_autoconvert_word(&detector, word, &converted);
+        assert!(decision.is_err(), "must skip nonword tokens");
+    }
 }
