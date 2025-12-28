@@ -5,5 +5,7 @@ pub fn push(
     title: &str,
     text: &str,
 ) {
-    let _ = crate::tray::balloon_info(hwnd, title, text);
+    use crate::platform::win::tray::balloon_info;
+
+    let _ = balloon_info(hwnd, title, text);
 }

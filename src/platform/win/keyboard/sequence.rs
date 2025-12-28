@@ -3,7 +3,7 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{PostMessageW, WM_HOTKEY},
 };
 
-use crate::config;
+use crate::{app::HotkeySlot, config, input::hotkeys::*};
 
 pub(crate) fn chord_matches(template: config::HotkeyChord, input: config::HotkeyChord) -> bool {
     if template.mods != input.mods {
@@ -23,19 +23,19 @@ pub(crate) fn progress_for_slot_mut(
     slot: crate::app::HotkeySlot,
 ) -> &mut crate::app::SequenceProgress {
     match slot {
-        crate::app::HotkeySlot::LastWord => &mut state.hotkey_sequence_progress.last_word,
-        crate::app::HotkeySlot::Pause => &mut state.hotkey_sequence_progress.pause,
-        crate::app::HotkeySlot::Selection => &mut state.hotkey_sequence_progress.selection,
-        crate::app::HotkeySlot::SwitchLayout => &mut state.hotkey_sequence_progress.switch_layout,
+        HotkeySlot::LastWord => &mut state.hotkey_sequence_progress.last_word,
+        HotkeySlot::Pause => &mut state.hotkey_sequence_progress.pause,
+        HotkeySlot::Selection => &mut state.hotkey_sequence_progress.selection,
+        HotkeySlot::SwitchLayout => &mut state.hotkey_sequence_progress.switch_layout,
     }
 }
 
 pub(crate) fn hotkey_id_for_slot(slot: crate::app::HotkeySlot) -> i32 {
     match slot {
-        crate::app::HotkeySlot::LastWord => crate::hotkeys::HK_CONVERT_LAST_WORD_ID,
-        crate::app::HotkeySlot::Pause => crate::hotkeys::HK_PAUSE_TOGGLE_ID,
-        crate::app::HotkeySlot::Selection => crate::hotkeys::HK_CONVERT_SELECTION_ID,
-        crate::app::HotkeySlot::SwitchLayout => crate::hotkeys::HK_SWITCH_LAYOUT_ID,
+        HotkeySlot::LastWord => HK_CONVERT_LAST_WORD_ID,
+        HotkeySlot::Pause => HK_PAUSE_TOGGLE_ID,
+        HotkeySlot::Selection => HK_CONVERT_SELECTION_ID,
+        HotkeySlot::SwitchLayout => HK_SWITCH_LAYOUT_ID,
     }
 }
 

@@ -1,13 +1,3 @@
-mod clipboard;
-use clipboard as clip;
-
-mod input;
-pub(crate) mod last_word;
-
-pub use last_word::convert_last_word;
-
-mod mapping;
-
 use std::{ptr::null_mut, thread, time::Duration};
 
 use mapping::convert_ru_en_bidirectional;
@@ -25,10 +15,15 @@ use windows::Win32::{
     },
 };
 
+use super::mapping;
 use crate::{
     app::AppState,
-    conversion::input::{
-        KeySequence, reselect_last_inserted_text_utf16_units, send_ctrl_combo, send_text_unicode,
+    conversion::{
+        clipboard as clip,
+        input::{
+            KeySequence, reselect_last_inserted_text_utf16_units, send_ctrl_combo,
+            send_text_unicode,
+        },
     },
 };
 
@@ -83,7 +78,6 @@ pub fn convert_selection_if_any(state: &mut AppState) -> bool {
         }
     }
 }
-
 
 pub fn convert_selection(state: &mut AppState) {
     tracing::trace!("convert_selection called");
@@ -304,7 +298,7 @@ fn post_layout_change(fg: HWND, hkl: HKL) -> windows::core::Result<()> {
 /// Waits until both left and right Shift keys are released or the timeout elapses.
 ///
 /// Returns `true` as soon as neither Shift key is currently pressed.
-fn wait_shift_released(timeout_ms: u64) -> bool {
+pub fn wait_shift_released(timeout_ms: u64) -> bool {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
 
     while std::time::Instant::now() < deadline {

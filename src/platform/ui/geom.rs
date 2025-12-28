@@ -1,4 +1,4 @@
-use crate::ui::UiLayout;
+use crate::platform::ui::UiLayout;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RectI {

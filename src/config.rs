@@ -1,3 +1,6 @@
+mod config_validator;
+pub mod constants;
+
 use std::{
     io,
     path::{Path, PathBuf},
@@ -72,30 +75,54 @@ impl Default for Config {
             delay_ms: 100,
             hotkey_switch_layout: None,
             hotkey_pause: None,
-            hotkey_convert_last_word : None,
-            hotkey_convert_selection : None,
+            hotkey_convert_last_word: None,
+            hotkey_convert_selection: None,
             paused: false,
 
             hotkey_convert_last_word_sequence: Some(HotkeySequence {
-                first: HotkeyChord { mods: 4, mods_vks: 4, vk: None },
-                second: Some(HotkeyChord { mods: 4, mods_vks: 4, vk: None }),
+                first: HotkeyChord {
+                    mods: 4,
+                    mods_vks: 4,
+                    vk: None,
+                },
+                second: Some(HotkeyChord {
+                    mods: 4,
+                    mods_vks: 4,
+                    vk: None,
+                }),
                 max_gap_ms: 1000,
             }),
 
             hotkey_pause_sequence: Some(HotkeySequence {
-                first: HotkeyChord { mods: 4, mods_vks: 12, vk: None },
+                first: HotkeyChord {
+                    mods: 4,
+                    mods_vks: 12,
+                    vk: None,
+                },
                 second: None,
                 max_gap_ms: 1000,
             }),
 
             hotkey_convert_selection_sequence: Some(HotkeySequence {
-                first: HotkeyChord { mods: 4, mods_vks: 4, vk: None },
-                second: Some(HotkeyChord { mods: 4, mods_vks: 4, vk: None }),
+                first: HotkeyChord {
+                    mods: 4,
+                    mods_vks: 4,
+                    vk: None,
+                },
+                second: Some(HotkeyChord {
+                    mods: 4,
+                    mods_vks: 4,
+                    vk: None,
+                }),
                 max_gap_ms: 1000,
             }),
 
             hotkey_switch_layout_sequence: Some(HotkeySequence {
-                first: HotkeyChord { mods: 0, mods_vks: 0, vk: Some(20) },
+                first: HotkeyChord {
+                    mods: 0,
+                    mods_vks: 0,
+                    vk: Some(20),
+                },
                 second: None,
                 max_gap_ms: 1000,
             }),
@@ -131,6 +158,7 @@ pub fn load() -> io::Result<Config> {
 pub fn save(cfg: &Config) -> io::Result<()> {
     let path = config_path()?;
     ensure_parent_dir(&path)?;
-    cfg.validate_hotkey_sequences().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    cfg.validate_hotkey_sequences()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     confy::store_path(path, cfg).map_err(confy_err)
 }

@@ -1,11 +1,11 @@
 use windows::Win32::Foundation::WPARAM;
 
 use crate::{
-    hotkeys::{
+    input::hotkeys::{
         HK_CONVERT_LAST_WORD_ID, HK_CONVERT_SELECTION_ID, HK_PAUSE_TOGGLE_ID, HK_SWITCH_LAYOUT_ID,
         HotkeyAction, action_from_id,
     },
-    win::{hotkey_action_from_wparam, hotkey_id_from_wparam},
+    platform::win::{hotkey_action_from_wparam, hotkey_id_from_wparam},
 };
 
 #[test]

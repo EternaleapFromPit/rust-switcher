@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::{
     config,
-    win::keyboard::vk::{mod_bit_for_vk, mod_vk_bit_for_vk},
+    platform::win::keyboard::vk::{mod_bit_for_vk, mod_vk_bit_for_vk},
 };
 static MODS_DOWN: AtomicU32 = AtomicU32::new(0);
 static MODVKS_DOWN: AtomicU32 = AtomicU32::new(0);

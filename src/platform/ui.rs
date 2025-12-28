@@ -1,8 +1,6 @@
-pub(crate) mod colors;
-mod geom;
-use self::geom::*;
-
-pub(crate) mod error_notifier;
+pub mod colors;
+pub mod error_notifier;
+pub mod geom;
 pub mod info_notifier;
 
 use windows::{
@@ -19,7 +17,8 @@ use windows::{
 
 use crate::{
     app::{AppState, ControlId},
-    helpers::ws_i32,
+    platform::ui::geom::{Layout, RectI},
+    utils::helpers::ws_i32,
 };
 
 #[derive(Clone, Copy)]

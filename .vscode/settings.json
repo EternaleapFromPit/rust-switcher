@@ -12,5 +12,6 @@
       ]
     }
   },
-  "terminal.integrated.defaultProfile.windows": "VS 2022 Dev PowerShell"
+  "terminal.integrated.defaultProfile.windows": "VS 2022 Dev PowerShell",
+  "explorer.sortOrder": "mixed"
 }

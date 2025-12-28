@@ -2,7 +2,7 @@ use windows::Win32::Foundation::HWND;
 
 use crate::{
     config,
-    win::{
+    platform::win::{
         keyboard::{
             HookDecision,
             capture::{push_chord_capture, store_captured_hotkey},

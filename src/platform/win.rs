@@ -6,10 +6,12 @@
 //! present a settings window and respond to user actions.
 
 mod commands;
-mod hotkey_format;
+pub(crate) mod hotkey_format;
 pub(crate) mod keyboard;
 pub(crate) mod mouse;
 mod state;
+pub(crate) mod tray;
+mod visuals;
 mod window;
 
 pub(crate) use hotkey_format::{format_hotkey, format_hotkey_sequence};
@@ -37,14 +39,18 @@ use self::{
 };
 use crate::{
     app::AppState,
-    config, helpers,
-    hotkeys::{HotkeyAction, action_from_id, register_from_config},
-    tray::WM_APP_TRAY,
-    ui::{
-        self,
-        error_notifier::{T_CONFIG, T_UI, drain_one_and_present},
+    config,
+    domain::text::{last_word::autoconvert_last_word, switch_keyboard_layout},
+    input::hotkeys::{HotkeyAction, action_from_id, register_from_config},
+    platform::{
+        ui::{
+            self,
+            error_notifier::{T_CONFIG, T_UI, drain_one_and_present},
+        },
+        win::tray::{WM_APP_TRAY, balloon_info, remove_icon},
     },
-    ui_call, ui_try, visuals,
+    ui_call, ui_try,
+    utils::helpers,
 };
 
 fn set_hwnd_text(hwnd: HWND, s: &str) -> windows::core::Result<()> {
@@ -120,7 +126,7 @@ fn read_ui_to_config(state: &AppState, mut cfg: config::Config) -> config::Confi
         state.hotkey_values.selection,
     );
     cfg.hotkey_switch_layout = match cfg.hotkey_switch_layout_sequence {
-        Some(_) => None, // важно: только LL hook, иначе Windows не отличит LShift от RShift
+        Some(_) => None, // РІР°Р¶РЅРѕ: С‚РѕР»СЊРєРѕ LL hook, РёРЅР°С‡Рµ Windows РЅРµ РѕС‚Р»РёС‡РёС‚ LShift РѕС‚ RShift
         None => state.hotkey_values.switch_layout,
     };
 
@@ -141,7 +147,7 @@ fn apply_config_runtime(
     state.runtime_chord_capture = crate::app::RuntimeChordCapture::default();
     state.hotkey_sequence_progress = crate::app::HotkeySequenceProgress::default();
 
-    // Legacy fields (можно будет удалить позже, сейчас оставляем чтобы не ломать контракт)
+    // Legacy fields (РјРѕР¶РЅРѕ Р±СѓРґРµС‚ СѓРґР°Р»РёС‚СЊ РїРѕР·Р¶Рµ, СЃРµР№С‡Р°СЃ РѕСЃС‚Р°РІР»СЏРµРј С‡С‚РѕР±С‹ РЅРµ Р»РѕРјР°С‚СЊ РєРѕРЅС‚СЂР°РєС‚)
     state.active_switch_layout_sequence = cfg.hotkey_switch_layout_sequence;
     state.switch_layout_waiting_second = false;
     state.switch_layout_first_tick_ms = 0;
@@ -153,7 +159,7 @@ fn apply_config_runtime(
         state,
         T_CONFIG,
         "Failed to register hotkeys",
-        crate::hotkeys::register_from_config(hwnd, cfg)
+        crate::input::hotkeys::register_from_config(hwnd, cfg)
     );
 
     Ok(())
@@ -176,7 +182,7 @@ macro_rules! startup_or_return0 {
         match $expr {
             Ok(v) => v,
             Err(e) => {
-                $crate::ui::error_notifier::push($hwnd, $state, "", $text, &e);
+                $crate::platform::ui::error_notifier::push($hwnd, $state, "", $text, &e);
                 on_app_error($hwnd);
                 return LRESULT(0);
             }
@@ -191,7 +197,7 @@ macro_rules! startup_or_return0 {
 fn load_config_or_default(hwnd: HWND, state: &mut AppState) -> config::Config {
     config::load()
         .map_err(|e| {
-            crate::ui::error_notifier::push(
+            crate::platform::ui::error_notifier::push(
                 hwnd,
                 state,
                 T_CONFIG,
@@ -205,7 +211,9 @@ fn load_config_or_default(hwnd: HWND, state: &mut AppState) -> config::Config {
             Err(msg) => {
                 let user_text = msg.clone();
                 let source = io_to_win(std::io::Error::new(std::io::ErrorKind::InvalidInput, msg));
-                crate::ui::error_notifier::push(hwnd, state, T_CONFIG, &user_text, &source);
+                crate::platform::ui::error_notifier::push(
+                    hwnd, state, T_CONFIG, &user_text, &source,
+                );
                 None
             }
         })
@@ -288,21 +296,21 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         WM_HOTKEY => on_hotkey(hwnd, wparam),
         WM_TIMER => on_timer(hwnd, wparam),
         WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
-            crate::ui::colors::on_ctlcolor(wparam, lparam)
+            crate::platform::ui::colors::on_ctlcolor(wparam, lparam)
         }
         WM_DESTROY => {
             unsafe { PostQuitMessage(0) };
             LRESULT(0)
         }
         WM_NCDESTROY => unsafe { on_ncdestroy(hwnd) },
-        crate::ui::error_notifier::WM_APP_AUTOCONVERT => {
-            if crate::input_journal::last_token_autoconverted() {
+        crate::platform::ui::error_notifier::WM_APP_AUTOCONVERT => {
+            if crate::input::ring_buffer::last_token_autoconverted() {
                 return LRESULT(0);
             }
 
             with_state_mut_do(hwnd, |state| {
                 if !state.paused {
-                    crate::conversion::last_word::autoconvert_last_word(state);
+                    autoconvert_last_word(state);
                 }
             });
 
@@ -316,7 +324,8 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
                     let window_visible = unsafe {
                         windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool()
                     };
-                    let _ = crate::tray::show_tray_context_menu(hwnd, window_visible);
+                    let _ =
+                        crate::platform::win::tray::show_tray_context_menu(hwnd, window_visible);
                 }
                 _ => return LRESULT(0),
             }
@@ -348,7 +357,13 @@ impl ApplyConfigError {
     /// This method is intentionally side effecting and should be called only from
     /// the UI boundary code (for example a window command handler).
     fn notify(self, hwnd: HWND, state: &mut AppState) {
-        crate::ui::error_notifier::push(hwnd, state, T_CONFIG, &self.user_text, &self.source);
+        crate::platform::ui::error_notifier::push(
+            hwnd,
+            state,
+            T_CONFIG,
+            &self.user_text,
+            &self.source,
+        );
     }
 }
 
@@ -427,7 +442,7 @@ fn handle_cancel(hwnd: HWND, state: &mut AppState) {
         Ok(cfg) => cfg,
         Err(e) => {
             let e = io_to_win(e);
-            crate::ui::error_notifier::push(hwnd, state, "", "Failed to load config", &e);
+            crate::platform::ui::error_notifier::push(hwnd, state, "", "Failed to load config", &e);
             on_app_error(hwnd);
             return;
         }
@@ -445,7 +460,7 @@ unsafe fn on_ncdestroy(hwnd: HWND) -> LRESULT {
         return LRESULT(0);
     }
 
-    crate::tray::remove_icon(hwnd);
+    remove_icon(hwnd);
 
     let state = unsafe { &mut *p };
 
@@ -473,17 +488,17 @@ fn handle_pause_toggle(hwnd: HWND, state: &mut AppState) {
 
     let body = if state.paused {
         format!(
-            "Статус: деактивирована.\nАвтоконвертация выключена.\nПереключить: {}",
+            "РЎС‚Р°С‚СѓСЃ: РґРµР°РєС‚РёРІРёСЂРѕРІР°РЅР°.\nРђРІС‚РѕРєРѕРЅРІРµСЂС‚Р°С†РёСЏ РІС‹РєР»СЋС‡РµРЅР°.\nРџРµСЂРµРєР»СЋС‡РёС‚СЊ: {}",
             hotkey_text
         )
     } else {
         format!(
-            "Статус: активирована.\nАвтоконвертация включена.\nПереключить: {}",
+            "РЎС‚Р°С‚СѓСЃ: Р°РєС‚РёРІРёСЂРѕРІР°РЅР°.\nРђРІС‚РѕРєРѕРЅРІРµСЂС‚Р°С†РёСЏ РІРєР»СЋС‡РµРЅР°.\nРџРµСЂРµРєР»СЋС‡РёС‚СЊ: {}",
             hotkey_text
         )
     };
 
-    if let Err(_e) = crate::tray::balloon_info(hwnd, "RustSwitcher", &body) {
+    if let Err(_e) = balloon_info(hwnd, "RustSwitcher", &body) {
         #[cfg(debug_assertions)]
         eprintln!("tray balloon failed: {:?}", _e);
     }
@@ -523,7 +538,7 @@ fn on_hotkey(hwnd: HWND, wparam: WPARAM) -> LRESULT {
         HotkeyAction::ConvertLastWord => handle_convert_smart(state),
         HotkeyAction::ConvertSelection => crate::conversion::convert_selection(state),
         HotkeyAction::SwitchLayout => {
-            let _ = crate::conversion::switch_keyboard_layout();
+            let _ = switch_keyboard_layout();
         }
     });
 
@@ -544,7 +559,7 @@ fn on_app_error(hwnd: HWND) -> LRESULT {
 fn on_timer(_hwnd: HWND, _wparam: WPARAM) -> LRESULT {
     #[cfg(debug_assertions)]
     {
-        use crate::win::keyboard::debug_timers::handle_timer;
+        use crate::platform::win::keyboard::debug_timers::handle_timer;
 
         if let Some(r) = handle_timer(_hwnd, _wparam.0) {
             return r;

@@ -12,7 +12,7 @@ use windows::{
     core::{PCWSTR, Result, w},
 };
 
-use crate::helpers;
+use crate::utils::helpers;
 
 pub(crate) fn register_main_class(class_name: PCWSTR, hinstance: HINSTANCE) -> Result<()> {
     let wc = WNDCLASSEXW {

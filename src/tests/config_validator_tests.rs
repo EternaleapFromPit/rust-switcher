@@ -1,7 +1,7 @@
 use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN};
 
-use crate::{
-    config::{Config, HotkeyChord, HotkeySequence},
+use crate::config::{
+    Config, HotkeyChord, HotkeySequence,
     constants::{CONVERT_LAST_WORD, CONVERT_SELECTION, PAUSE, SWITCH_LAYOUT},
 };
 

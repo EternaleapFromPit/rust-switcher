@@ -19,7 +19,10 @@ use windows::Win32::{
 };
 
 use self::vk::{is_keydown_msg, is_keyup_msg, mod_bit_for_vk, normalize_vk};
-use crate::win::keyboard::{keydown::handle_keydown, keyup::handle_keyup};
+use crate::{
+    input,
+    platform::win::keyboard::{keydown::handle_keydown, keyup::handle_keyup},
+};
 
 static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
 static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -50,10 +53,10 @@ impl HookDecision {
 }
 
 fn report_hook_error(hwnd: HWND, state: &mut crate::app::AppState, e: &windows::core::Error) {
-    crate::ui::error_notifier::push(
+    crate::platform::ui::error_notifier::push(
         hwnd,
         state,
-        crate::ui::error_notifier::T_UI,
+        crate::platform::ui::error_notifier::T_UI,
         "Hotkey handling failed",
         e,
     );
@@ -80,16 +83,16 @@ extern "system" fn proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     };
 
     if is_keydown_msg(msg) && matches!(decision.as_ref(), Ok(HookDecision::Pass)) {
-        let typed = crate::input_journal::record_keydown(kb, vk);
+        let typed = input::ring_buffer::record_keydown(kb, vk);
 
         if typed.is_some()
-            && crate::input_journal::last_char_triggers_autoconvert()
+            && crate::input::ring_buffer::last_char_triggers_autoconvert()
             && let Some(hwnd) = main_hwnd()
         {
             let _ = unsafe {
                 PostMessageW(
                     Some(hwnd),
-                    crate::ui::error_notifier::WM_APP_AUTOCONVERT,
+                    crate::platform::ui::error_notifier::WM_APP_AUTOCONVERT,
                     WPARAM(0),
                     LPARAM(0),
                 )
@@ -132,10 +135,10 @@ pub fn install(hwnd: HWND, state: &mut crate::app::AppState) {
             eprintln!("RustSwitcher: WH_KEYBOARD_LL installed");
         }
         Err(e) => {
-            crate::ui::error_notifier::push(
+            crate::platform::ui::error_notifier::push(
                 hwnd,
                 state,
-                crate::ui::error_notifier::T_UI,
+                crate::platform::ui::error_notifier::T_UI,
                 "Failed to install keyboard hook",
                 &e,
             );

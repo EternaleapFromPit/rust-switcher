@@ -44,7 +44,7 @@ pub fn drain_one_and_present(hwnd: HWND, state: &mut AppState) {
         );
     };
 
-    crate::tray::balloon_error(hwnd, &err.title, &err.user_text)
+    crate::platform::win::tray::balloon_error(hwnd, &err.title, &err.user_text)
         .inspect_err(|_| show_message_box(&err.title, &err.user_text))
         .ok();
 }
@@ -118,7 +118,7 @@ pub fn report_unit(
 #[macro_export]
 macro_rules! ui_try {
     ($hwnd:expr, $state:expr, $title:expr, $text:expr, $expr:expr) => {{
-        $crate::ui::error_notifier::report_unit($hwnd, $state, $title, $text, $expr);
+        $crate::platform::ui::error_notifier::report_unit($hwnd, $state, $title, $text, $expr);
     }};
 }
 
@@ -129,6 +129,6 @@ macro_rules! ui_try {
 macro_rules! ui_call {
     ($hwnd:expr, $state:expr, $title:expr, $text:expr, $call:expr) => {{
         let r = $call;
-        $crate::ui::error_notifier::report_unit($hwnd, $state, $title, $text, r);
+        $crate::platform::ui::error_notifier::report_unit($hwnd, $state, $title, $text, r);
     }};
 }

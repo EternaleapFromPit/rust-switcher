@@ -1,6 +1,6 @@
 use windows::Win32::Foundation::HWND;
 
-use crate::{config, helpers, win::format_hotkey_sequence};
+use crate::{config, platform::win::format_hotkey_sequence, utils::helpers};
 
 pub(crate) fn chord_to_hotkey(ch: config::HotkeyChord) -> config::Hotkey {
     config::Hotkey {

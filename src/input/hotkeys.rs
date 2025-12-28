@@ -59,13 +59,13 @@ pub fn unregister_all(hwnd: HWND) -> windows::core::Result<()> {
 fn register_one(hwnd: HWND, id: i32, hk: Option<config::Hotkey>) -> windows::core::Result<()> {
     let Some(hk) = hk else {
         #[cfg(debug_assertions)]
-        crate::helpers::debug_log(&format!("hotkey id={} disabled", id));
+        crate::utils::helpers::debug_log(&format!("hotkey id={} disabled", id));
         return Ok(());
     };
 
     if hk.vk == 0 {
         #[cfg(debug_assertions)]
-        crate::helpers::debug_log(&format!(
+        crate::utils::helpers::debug_log(&format!(
             "hotkey id={} ignored: invalid vk=0x0 mods=0x{:X}",
             id, hk.mods
         ));
@@ -73,7 +73,7 @@ fn register_one(hwnd: HWND, id: i32, hk: Option<config::Hotkey>) -> windows::cor
     }
 
     #[cfg(debug_assertions)]
-    crate::helpers::debug_log(&format!(
+    crate::utils::helpers::debug_log(&format!(
         "RegisterHotKey id={} mods=0x{:X} vk=0x{:X}",
         id, hk.mods, hk.vk
     ));
@@ -83,7 +83,7 @@ fn register_one(hwnd: HWND, id: i32, hk: Option<config::Hotkey>) -> windows::cor
     }
 
     #[cfg(debug_assertions)]
-    crate::helpers::debug_log(&format!("RegisterHotKey OK id={}", id));
+    crate::utils::helpers::debug_log(&format!("RegisterHotKey OK id={}", id));
 
     Ok(())
 }

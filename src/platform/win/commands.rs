@@ -4,7 +4,7 @@ use windows::Win32::{
 };
 
 use super::state::with_state_mut_do;
-use crate::{app::ControlId, helpers, ui::error_notifier::T_UI};
+use crate::{app::ControlId, platform::ui::error_notifier::T_UI, utils::helpers};
 
 #[cfg_attr(
     debug_assertions,
@@ -85,7 +85,7 @@ fn handle_buttons(hwnd: HWND, id: i32) -> LRESULT {
     match cid {
         ControlId::Exit => with_state_mut_do(hwnd, |state| {
             if let Err(e) = unsafe { DestroyWindow(hwnd) } {
-                crate::ui::error_notifier::push(
+                crate::platform::ui::error_notifier::push(
                     hwnd,
                     state,
                     T_UI,
