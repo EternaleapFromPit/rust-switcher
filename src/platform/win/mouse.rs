@@ -50,8 +50,6 @@ pub fn install() {
     if let Ok(h) = unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(proc), None, 0) } {
         HOOK_HANDLE.store(h.0 as isize, Ordering::Relaxed);
         #[cfg(debug_assertions)]
-        eprintln!("RustSwitcher: WH_MOUSE_LL installed");
-    } else {
-        // Молча: это не критично для работы приложения.
+        tracing::info!("WH_MOUSE_LL installed");
     }
 }
