@@ -1,280 +1,176 @@
-# Rust Switcher - Specification
+# Rust Switcher - Specification (code driven)
 
-## Purpose
+This document describes the current behavior and architecture of the repository implementation.
+It is intended as onboarding documentation and as a reference for expected runtime behavior.
 
-Rust Switcher is a small background utility for Windows 11 that performs explicit, user triggered keyboard layout conversion.
+## Scope
 
-The application does not try to automatically fix input. All actions are executed only by user commands.
+- Supported OS: Windows only
+- Primary UI: native Win32 window + optional tray icon
+- Linux: out of scope for current implementation, tracked in roadmap
 
-Supported actions:
-- Convert last word: convert the last word to the left of the caret
-- Convert selection: convert the currently selected text
-- Switch keyboard layout: switch the system layout only, without converting text
-- Pause: temporarily disable all hotkey handling
-- Toggle conversion scope: toggle Convert last word scope between Last word and Last phrase
+## Core user goals
 
----
+- Convert text typed in the wrong keyboard layout (RU <-> EN) quickly and reliably.
+- Work without relying on fragile clipboard only flows for the main path.
+- Provide global hotkeys and light UI for configuration.
 
-## Target Platform and Scope
+## Terminology
 
-- OS: Windows 11
-- Works in regular windowed applications:
-  - browsers
-  - IDEs
-  - messengers
-- Not required to work in:
-  - fullscreen applications
-  - games
-  - borderless fullscreen windows
+- Convert: map characters between keyboard layouts (RU <-> EN) using the built in mapping table.
+- Selection: currently selected text in the active application.
+- Last word: the last token captured by the keyboard hook input journal.
+- Autoconvert: automatic conversion triggered by typed delimiter characters (for example Space).
+- Paused: disables autoconvert only. Hotkeys still work.
 
----
+## High level architecture
 
-## Hotkeys
-
-The application uses a set of hotkeys configurable via the GUI.
-
-### Actions
-
-1) Convert last word
-- If there is a selection, behaves like Convert selection
-- If there is no selection, selects the last word to the left of the caret and converts it
-
-2) Convert selection
-- Requires a non empty selection, otherwise does nothing
-
-3) Switch keyboard layout
-- Always switches the system keyboard layout to the next layout
-- Does not modify any text
-
-4) Pause
-- Toggles pause state on or off
-- When paused, other hotkeys do nothing
-
-5) Toggle conversion scope
-- Toggles Convert last word scope between Last word and Last phrase
-- Trigger: pressing Left Shift and Right Shift together
-- Must not interfere with normal typing
-- Debounced: triggers once per press pair until at least one Shift is released
-
-### Default Hotkeys
-
-Defaults match the reference UI:
-- Convert last word: Pause
-- Convert selection: Ctrl + Break (sometimes shown as Control + Cancel)
-- Switch keyboard layout: None
-- Pause: None
-
-Notes:
-- On assignment, if the hotkey is unavailable or conflicts, the action must not become active and the previous value remains.
-- The application does not override Alt + Shift or Win + Space and relies on standard Windows layout switching.
-
----
-
-## Execution Delay
-
-Setting: Delay before paste (ms)
-- A delay before inserting the converted text
-- Needed for stability in apps with slow selection or clipboard updates
-- Configured as an integer in milliseconds
-- Default value: 100 ms
-
----
-
-## Text Conversion
-
-Base:
-- Character mapping based on keyboard layouts (RU <-> EN for the active pair)
-- Conversion is deterministic for a given mapping table
-- No translation
-- No API calls
-- No background auto-fix
-
-Two scopes for Convert last word:
-- Last word: convert only the last word to the left of the caret
-- Last phrase: greedily extend the range by words to the left while conversion quality improves, then convert that range
-
-Last phrase heuristic:
-- Uses lingua-rs limited to languages: Russian and English
-- The app compares how plausible the text looks before and after conversion
-- The app extends selection left by one word at a time and stops when:
-  - conversion no longer improves the target language confidence by a threshold, or
-  - confidence drops below a minimal threshold, or
-  - max_words limit is reached
-- The heuristic runs only on explicit user command, never automatically
-
-Logic for conversion:
-- take the existing text (selection)
-- convert characters according to the mapping table (no system layout switching is required for conversion itself)
-- insert the result
-
-Layout switching:
-- Switching the system layout is a separate step and can be performed after conversion so the user continues typing in the expected layout
-
-
----
-
-## Action Flows
-
-### Convert selection
-
-1) Send Ctrl + C
-2) Read text from the system clipboard
-3) Wait Delay before paste
-4) Convert the text according to the mapping table
-5) Send Ctrl + V
-6) Restore original clipboard contents
-
-Requirements:
-- After paste, switch system keyboard layout to the next layout so the user continues typing in the expected layout
-- Clipboard is always backed up and restored
-- No per character backspace logic
-
-### Convert last word
-
-If there is a selection:
-- behaves like Convert selection
-
-If there is no selection:
-- depends on Conversion scope
-
-Scope: Last word
-1) Select the last word to the left of the caret
-   - stop at whitespace or start of line
-2) Then run Convert selection flow
-
-Scope: Last phrase
-1) Select the last word to the left of the caret
-2) Repeat:
-   - evaluate original vs converted text with lingua-rs (RU, EN only)
-   - if converted is better for the same target language, extend selection by one word to the left
-   - otherwise stop and revert to the last good selection
-3) Then run Convert selection flow
-
-Limits:
-- max_words: N (configurable, default 8)
-- minimal confidence and minimal delta thresholds are configurable constants
-
----
-
-## Tray and GUI
-
-### Tray Icon
-
-Setting: Show tray icon
-- If enabled, the tray icon is always present while the application is running
-- If disabled, there is no tray icon, and the GUI can only be opened from the window
-
-Tray context menu:
-- Pause or Resume
-- Exit
-
-Tray click:
-- Show or hide GUI
-
-### GUI
-
-The settings window is minimal and matches the reference layout.
-
-Left side:
-- Checkbox: Start on windows startup
-- Checkbox: Show tray icon
-- Input: Delay before switching (ms)
-- Combo: Conversion scope
-  - Last word
-  - Last phrase
-- Button: Report an issue
-- Button: Exit program
-
-Right side, Hotkeys group:
-- Read only display fields showing current hotkeys:
-  - Convert last word
-  - Pause
-  - Convert selection
-  - Switch keyboard layout
-- Must support the value None
-
-Bottom buttons:
-- Apply
-  - atomically writes the config and applies settings
-- Cancel
-  - discards UI changes and restores values from the current config
-  
-
-### Report an issue
-
-- Opens the project issues page using the system shell
-- The application itself does not send any data and has no telemetry
-
----
-
-## Autostart
-
-Portable application model.
-
-When Start on windows startup is enabled:
-- the executable is copied to `%APPDATA%\RustSwitcher\`
-- `config.json` is stored there
-- autostart points to that copied executable
-
-When disabled:
-- the autostart entry is removed
-- files under `%APPDATA%\RustSwitcher\` are not removed automatically
-
----
+- UI boundary (Win32):
+  - Window procedure, message loop, controls, Apply and Cancel logic
+  - Tray icon integration
+- Input boundary:
+  - Low level keyboard hook (WH_KEYBOARD_LL)
+  - Input journal and ring buffer for tokenization and last word extraction
+- Domain logic:
+  - text conversion, replacement of selection, insertion via SendInput
+- Platform integration:
+  - global hotkeys (RegisterHotKey)
+  - keyboard layout switching
+  - autostart shortcut in Startup folder
+  - notifications (tray balloon, MessageBox fallback)
+- Persistence:
+  - config stored under %APPDATA%\RustSwitcher\config.json via confy
 
 ## Configuration
 
-- Path: `%APPDATA%\RustSwitcher\config.json`
-- Format: JSON
-- Atomic writes (write to temp then rename)
-- Settings:
-  - start_on_startup: bool
-  - show_tray_icon: bool
-  - delay_ms: u32
-  - hotkey_convert_last_word: Hotkey or None
-  - hotkey_convert_selection: Hotkey or None
-  - hotkey_switch_layout: Hotkey or None
-  - hotkey_pause: Hotkey or None
-  - paused: bool
-  - conversion_scope: "last_word" | "last_phrase"
-  - last_phrase_max_words: u32
+Config fields (see src/config.rs):
+- start_on_startup: bool
+- show_tray_icon: bool
+- delay_ms: u32
+- paused: bool
+- Hotkeys (legacy single chord, optional):
+  - hotkey_convert_last_word
+  - hotkey_convert_selection
+  - hotkey_switch_layout
+  - hotkey_pause
+- Hotkey sequences (preferred, optional):
+  - hotkey_convert_last_word_sequence
+  - hotkey_pause_sequence
+  - hotkey_switch_layout_sequence
 
----
+Default bindings (current defaults in code):
+- Convert smart: double tap Left Shift within 1000 ms
+- Pause toggle (autoconvert only): press Left Shift + Right Shift together
+- Switch keyboard layout: CapsLock
 
-## Logging and Networking
+Notes:
+- The UI currently displays hotkeys as read only values derived from config.
+- Hotkey sequences are validated on save.
 
-- Release builds:
-  - no logs
-  - no networking
-  - no telemetry
-- Debug builds:
-  - optional debug logging
+## Actions and behavior
 
----
+### Convert smart
 
-## Stability and Safety
+This is the primary conversion action.
+Behavior:
+- If there is a non empty selection, it converts the selection.
+- Otherwise it converts last word using the input journal.
 
-- Single instance only
-- Self generated input events are ignored
-- When paused, no hotkeys except Pause are executed
-- Clipboard is always restored even on errors (best effort)
+### Convert selection
 
----
+Algorithm (domain/text/convert.rs):
+- Copy selection text while restoring clipboard afterwards (best effort).
+- Sleep for delay_ms before conversion and replacement.
+- Convert the copied text via mapping.
+- Replace selection by:
+  - Send Delete to remove the selection
+  - Inject Unicode text via SendInput
+  - Attempt to reselect the inserted text within a retry budget
 
-## Out of Scope
+This intentionally avoids paste via Ctrl+V to reduce interference with application specific paste behavior.
 
-- AI features
-- API based translation
-- smart language detection
-- macOS or Linux (for now)
+### Convert last word
 
----
+Algorithm (domain/text/last_word.rs):
+- Uses the input journal tokenization to determine the last word.
+- Sleep for delay_ms before conversion and replacement.
+- Applies an input based replacement strategy (backspace and Unicode injection via SendInput).
+- Clipboard is not used as the primary mechanism.
 
-## Definition of Done
+### Switch keyboard layout
 
-- Convert last word works reliably in browsers and IDEs
-- Convert selection works reliably in browsers and IDEs
-- Switch keyboard layout actually switches the system layout
-- Tray, pause or resume, and autostart work
-- GUI matches the spec, Apply or Cancel works correctly
-- No unnecessary behavior
+Switches keyboard layout (Windows) for the current thread using the platform API.
+
+### Autoconvert
+
+- The low level keyboard hook maintains a ring buffer of recent tokens.
+- When a trigger delimiter is typed, the hook posts a window message WM_APP_AUTOCONVERT.
+- The UI thread handles WM_APP_AUTOCONVERT and calls autoconvert_last_word when not paused.
+- A guard prevents double conversion of the same token.
+
+### Pause
+
+- Pause toggles state.paused.
+- When paused:
+  - autoconvert is disabled
+  - hotkeys and manual conversion actions still work
+- Pause toggling currently shows an informational tray balloon if the tray is available.
+
+## UI
+
+Native Win32 UI with 2 tabs:
+
+### Settings tab
+- Start on startup (checkbox)
+- Show tray icon (checkbox)
+- Delay ms (edit box)
+
+### Hotkeys tab
+- Read only displays for:
+  - Convert last word (sequence)
+  - Convert selection
+  - Pause
+  - Switch layout
+
+Buttons:
+- Apply: persists config and applies runtime changes
+- Cancel: reloads config from disk and applies it to UI and runtime
+- Exit: closes the application
+
+## Tray icon
+
+- When enabled, a tray icon is added via Shell_NotifyIconW.
+- Right click shows a context menu:
+  - Show or Hide (toggles window visibility)
+  - Exit
+- Left click behavior is not implemented at the moment.
+
+## Autostart
+
+- Implemented by creating a shortcut RustSwitcher.lnk in the user Startup folder.
+- The shortcut points to the current executable path.
+- Moving or deleting the executable breaks autostart.
+
+## Notifications and errors
+
+- Info notifications use tray balloon where possible.
+- Error notifications are queued and drained on the UI thread.
+- Fallback for tray failure is MessageBoxW.
+
+## Logging
+
+Current behavior:
+- A tracing subscriber is installed on startup.
+- Logs are written to ./logs/output.log with hourly rotation.
+- This currently happens in all build modes.
+
+Planned change (tracked in roadmap):
+- Disable file logging in release builds by default, or gate it behind a feature or env var.
+
+## Known issues
+
+These are current code behavior issues, not design goals:
+- start_on_startup and show_tray_icon are not applied automatically on app startup.
+  They are applied after Apply or Cancel.
+- Tray notifications may be attempted even when tray icon is disabled, which can lead to failures.
+- Notifications can block the UI thread (MessageBox fallback), which can slow hotkey handling.
