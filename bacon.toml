@@ -7,22 +7,66 @@ env.RUSTFLAGS = "-D warnings"
 env.RUST_LOG = "trace"
 
 [jobs.dev-long]
-command = [
-    "cmd",
-    "/c",
-    "taskkill /F /T /IM rust-switcher.exe >NUL 2>NUL & cargo +nightly fmt --check && cargo +nightly clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::style -D clippy::complexity -D clippy::perf -D clippy::cargo -D clippy::unwrap_used -D clippy::expect_used -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro -A clippy::multiple_crate_versions && cargo +nightly run --features debug-tracing",
-]
+command = ["powershell", "-NoProfile", "-Command", """
+  $ErrorActionPreference = 'Stop'
+
+  cargo +nightly fmt --check
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  cargo +nightly clippy --all-targets --all-features -- `
+    -D warnings `
+    -D clippy::all `
+    -D clippy::style `
+    -D clippy::complexity `
+    -D clippy::perf `
+    -D clippy::cargo `
+    -D clippy::unwrap_used `
+    -D clippy::expect_used `
+    -D clippy::todo `
+    -D clippy::unimplemented `
+    -D clippy::dbg_macro `
+    -A clippy::multiple_crate_versions
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  cargo +nightly build --features debug-tracing
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  .\\target\\debug\\rust-switcher.exe
+  """]
+kill = ["taskkill", "/F", "/T", "/IM", "rust-switcher.exe"]
 need_stdout = true
 allow_warnings = false
 background = false
 on_change_strategy = "kill_then_restart"
 
 [jobs.release-long]
-command = [
-    "cmd",
-    "/c",
-    "taskkill /F /T /IM rust-switcher.exe >NUL 2>NUL & cargo +nightly fmt --check && cargo +nightly clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::style -D clippy::complexity -D clippy::perf -D clippy::cargo -D clippy::unwrap_used -D clippy::expect_used -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro -A clippy::multiple_crate_versions && cargo +nightly run --release --locked",
-]
+command = ["powershell", "-NoProfile", "-Command", """
+  $ErrorActionPreference = 'Stop'
+
+  cargo +nightly fmt --check
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  cargo +nightly clippy --all-targets --all-features -- `
+    -D warnings `
+    -D clippy::all `
+    -D clippy::style `
+    -D clippy::complexity `
+    -D clippy::perf `
+    -D clippy::cargo `
+    -D clippy::unwrap_used `
+    -D clippy::expect_used `
+    -D clippy::todo `
+    -D clippy::unimplemented `
+    -D clippy::dbg_macro `
+    -A clippy::multiple_crate_versions
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  cargo +nightly build --release --locked
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  .\\target\\release\\rust-switcher.exe
+  """]
+kill = ["taskkill", "/F", "/T", "/IM", "rust-switcher.exe"]
 need_stdout = true
 allow_warnings = false
 background = false
@@ -30,22 +74,59 @@ on_change_strategy = "kill_then_restart"
 
 [jobs.test-long]
 env.RUST_TEST_NOCAPTURE = "1"
-command = [
-    "cmd",
-    "/c",
-    "taskkill /F /T /IM rust-switcher.exe >NUL 2>NUL & cargo +nightly fmt --check && cargo +nightly clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::style -D clippy::complexity -D clippy::perf -D clippy::cargo -D clippy::unwrap_used -D clippy::expect_used -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro -A clippy::multiple_crate_versions && cargo +nightly test -- --nocapture",
-]
+command = ["powershell", "-NoProfile", "-Command", """
+  $ErrorActionPreference = 'Stop'
+
+  cargo +nightly fmt --check
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  cargo +nightly clippy --all-targets --all-features -- `
+    -D warnings `
+    -D clippy::all `
+    -D clippy::style `
+    -D clippy::complexity `
+    -D clippy::perf `
+    -D clippy::cargo `
+    -D clippy::unwrap_used `
+    -D clippy::expect_used `
+    -D clippy::todo `
+    -D clippy::unimplemented `
+    -D clippy::dbg_macro `
+    -A clippy::multiple_crate_versions
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  cargo +nightly test -- --nocapture
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  """]
 need_stdout = true
 allow_warnings = false
 background = false
 on_change_strategy = "kill_then_restart"
 
 [jobs.dushnota]
-command = [
-    "cmd",
-    "/c",
-    "cargo +nightly fmt --check && cargo +nightly clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::style -D clippy::complexity -D clippy::perf -D clippy::cargo -D clippy::unwrap_used -D clippy::expect_used -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro -D clippy::pedantic -D clippy::panic -A clippy::multiple_crate_versions",
-]
+command = ["powershell", "-NoProfile", "-Command", """
+  $ErrorActionPreference = 'Stop'
+
+  cargo +nightly fmt --check
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  cargo +nightly clippy --all-targets --all-features -- `
+    -D warnings `
+    -D clippy::all `
+    -D clippy::style `
+    -D clippy::complexity `
+    -D clippy::perf `
+    -D clippy::cargo `
+    -D clippy::unwrap_used `
+    -D clippy::expect_used `
+    -D clippy::todo `
+    -D clippy::unimplemented `
+    -D clippy::dbg_macro `
+    -D clippy::pedantic `
+    -D clippy::panic `
+    -A clippy::multiple_crate_versions
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  """]
 need_stdout = true
 allow_warnings = false
 background = false
