@@ -246,17 +246,19 @@ pub fn switch_tray_icon(hwnd: HWND, use_green: bool) -> windows::core::Result<()
             uID: TRAY_UID,
             ..Default::default()
         };
-        
+
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP;
         nid.uCallbackMessage = WM_APP_TRAY;
         nid.hIcon = icon;
-        
+
         let result = shell_notify(NIM_MODIFY, &nid, "switch_tray_icon");
-        result 
+        result
     }
 }
 
-unsafe fn green_icon(hwnd: HWND) -> windows::core::Result<windows::Win32::UI::WindowsAndMessaging::HICON> {
+unsafe fn green_icon(
+    hwnd: HWND,
+) -> windows::core::Result<windows::Win32::UI::WindowsAndMessaging::HICON> {
     let hinst = unsafe { GetWindowLongPtrW(hwnd, GWLP_HINSTANCE) };
     let hinst = HINSTANCE(hinst as *mut core::ffi::c_void);
 
@@ -264,7 +266,7 @@ unsafe fn green_icon(hwnd: HWND) -> windows::core::Result<windows::Win32::UI::Wi
         LoadImageW(
             Some(hinst),
             #[allow(clippy::manual_dangling_ptr)]
-            PCWSTR(2usize as *const u16),  // ← Resource ID 2 (green icon)
+            PCWSTR(2usize as *const u16), // ← Resource ID 2 (green icon)
             IMAGE_ICON,
             0,
             0,
@@ -272,7 +274,7 @@ unsafe fn green_icon(hwnd: HWND) -> windows::core::Result<windows::Win32::UI::Wi
         )
         .map(|h| windows::Win32::UI::WindowsAndMessaging::HICON(h.0))
     };
-    let h = h?; 
+    let h = h?;
 
     Ok(h)
 }

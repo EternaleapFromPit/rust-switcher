@@ -48,7 +48,10 @@ use crate::{
             self,
             error_notifier::{T_CONFIG, T_UI, drain_one_and_present},
         },
-        win::{self, tray::{WM_APP_TRAY, balloon_info, remove_icon}},
+        win::{
+            self,
+            tray::{WM_APP_TRAY, balloon_info, remove_icon},
+        },
     },
     ui_call, ui_try,
     utils::helpers,
