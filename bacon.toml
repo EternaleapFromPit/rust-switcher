@@ -1,17 +1,16 @@
 #:schema https://dystroy.org/bacon/.bacon.schema.json
 
 default_job = "dev-long"
+
 env.CARGO_TERM_COLOR = "always"
+env.RUSTFLAGS = "-D warnings"
+env.RUST_LOG = "trace"
 
 [jobs.dev-long]
-env.RUST_LOG = "trace"
-env.RUSTFLAGS = "-D warnings"
 command = [
-    "powershell",
-    "-NoProfile",
-    "-File",
-    "scripts/bacon_strict.ps1",
-    "dev",
+    "cmd",
+    "/c",
+    "cargo +nightly fmt --check && cargo +nightly clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::style -D clippy::complexity -D clippy::perf -D clippy::cargo -D clippy::unwrap_used -D clippy::expect_used -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro -A clippy::multiple_crate_versions && cargo +nightly run --features debug-tracing",
 ]
 need_stdout = true
 allow_warnings = false
@@ -19,13 +18,10 @@ background = false
 on_change_strategy = "kill_then_restart"
 
 [jobs.release-long]
-env.RUSTFLAGS = "-D warnings"
 command = [
-    "powershell",
-    "-NoProfile",
-    "-File",
-    "scripts/bacon_strict.ps1",
-    "release",
+    "cmd",
+    "/c",
+    "cargo +nightly fmt --check && cargo +nightly clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::style -D clippy::complexity -D clippy::perf -D clippy::cargo -D clippy::unwrap_used -D clippy::expect_used -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro -A clippy::multiple_crate_versions && cargo +nightly run --release --locked",
 ]
 need_stdout = true
 allow_warnings = false
@@ -34,14 +30,10 @@ on_change_strategy = "kill_then_restart"
 
 [jobs.test-long]
 env.RUST_TEST_NOCAPTURE = "1"
-env.RUST_LOG = "trace"
-env.RUSTFLAGS = "-D warnings"
 command = [
-    "powershell",
-    "-NoProfile",
-    "-File",
-    "scripts/bacon_strict.ps1",
-    "test",
+    "cmd",
+    "/c",
+    "cargo +nightly fmt --check && cargo +nightly clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::style -D clippy::complexity -D clippy::perf -D clippy::cargo -D clippy::unwrap_used -D clippy::expect_used -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro -A clippy::multiple_crate_versions && cargo +nightly test -- --nocapture",
 ]
 need_stdout = true
 allow_warnings = false
@@ -49,13 +41,10 @@ background = false
 on_change_strategy = "kill_then_restart"
 
 [jobs.dushnota]
-env.RUSTFLAGS = "-D warnings"
 command = [
-    "powershell",
-    "-NoProfile",
-    "-File",
-    "scripts/bacon_strict.ps1",
-    "dushnota",
+    "cmd",
+    "/c",
+    "cargo +nightly fmt --check && cargo +nightly clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::style -D clippy::complexity -D clippy::perf -D clippy::cargo -D clippy::unwrap_used -D clippy::expect_used -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro -D clippy::pedantic -D clippy::panic -A clippy::multiple_crate_versions",
 ]
 need_stdout = true
 allow_warnings = false
