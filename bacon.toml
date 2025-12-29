@@ -33,7 +33,13 @@ command = ["powershell", "-NoProfile", "-Command", """
 
   .\\target\\debug\\rust-switcher.exe
   """]
-kill = ["taskkill", "/F", "/T", "/IM", "rust-switcher.exe"]
+kill = [
+  "powershell",
+  "-NoProfile",
+  "-Command",
+  "Get-Process rust-switcher -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }; Start-Sleep -Milliseconds 200; Get-Process rust-switcher -ErrorAction SilentlyContinue | Stop-Process -Force",
+]
+
 need_stdout = true
 allow_warnings = false
 background = false
@@ -66,7 +72,12 @@ command = ["powershell", "-NoProfile", "-Command", """
 
   .\\target\\release\\rust-switcher.exe
   """]
-kill = ["taskkill", "/F", "/T", "/IM", "rust-switcher.exe"]
+kill = [
+  "powershell",
+  "-NoProfile",
+  "-Command",
+  "Get-Process rust-switcher -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }; Start-Sleep -Milliseconds 200; Get-Process rust-switcher -ErrorAction SilentlyContinue | Stop-Process -Force",
+]
 need_stdout = true
 allow_warnings = false
 background = false

@@ -22,8 +22,15 @@ pub fn convert_ru_en_bidirectional(text: &str) -> String {
         matches!(ch, 'а'..='я' | 'А'..='Я' | 'ё' | 'Ё')
     }
 
+    #[rustfmt::skip]
     fn is_latin(ch: char) -> bool {
         ch.is_ascii_alphabetic()
+            || matches!(
+                ch,
+                
+                '[' | ']' | ';' | '\'' | ',' | '.' | '`' | '{' | '}' | ':' | '"' | '<' | '>' | '~'
+                    | '?' | '/'
+            )
     }
 
     fn map_ru_to_en(ch: char) -> char {
