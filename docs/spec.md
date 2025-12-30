@@ -1,4 +1,4 @@
-# Rust Switcher - Specification (code driven)
+# Rust Switcher - Specification (implementation aligned)
 
 This document describes the current behavior and architecture of the repository implementation.
 It is intended as onboarding documentation and as a reference for expected runtime behavior.
@@ -6,7 +6,7 @@ It is intended as onboarding documentation and as a reference for expected runti
 ## Scope
 
 - Supported OS: Windows only
-- Primary UI: native Win32 window + optional tray icon
+- Primary UI: native Win32 window + tray icon (always on, user can hide via Windows UI)
 - Linux: out of scope for current implementation, tracked in roadmap
 
 ## Core user goals
@@ -21,7 +21,9 @@ It is intended as onboarding documentation and as a reference for expected runti
 - Selection: currently selected text in the active application.
 - Last word: the last token captured by the keyboard hook input journal.
 - Autoconvert: automatic conversion triggered by typed delimiter characters (for example Space).
-- Paused: disables autoconvert only. Hotkeys still work.
+- Autoconvert enabled: runtime flag controlling whether Autoconvert is active.
+  Important: this flag is NOT persisted in config.
+  Default on app start: disabled.
 
 ## High level architecture
 
@@ -46,7 +48,6 @@ It is intended as onboarding documentation and as a reference for expected runti
 Config fields (see src/config.rs):
 - start_on_startup: bool
 - delay_ms: u32
-- paused: bool
 - Hotkeys (legacy single chord, optional):
   - hotkey_convert_last_word
   - hotkey_convert_selection
@@ -57,14 +58,15 @@ Config fields (see src/config.rs):
   - hotkey_pause_sequence
   - hotkey_switch_layout_sequence
 
+Notes:
+- Autoconvert enabled is runtime only and is not stored in config.
+- The UI displays hotkeys as read only values derived from config.
+- Hotkey sequences are validated on save.
+
 Default bindings (current defaults in code):
 - Convert smart: double tap Left Shift within 1000 ms
-- Pause toggle (autoconvert only): press Left Shift + Right Shift together
+- Autoconvert toggle: press Left Shift + Right Shift together
 - Switch keyboard layout: CapsLock
-
-Notes:
-- The UI currently displays hotkeys as read only values derived from config.
-- Hotkey sequences are validated on save.
 
 ## Actions and behavior
 
@@ -104,16 +106,14 @@ Switches keyboard layout (Windows) for the current thread using the platform API
 
 - The low level keyboard hook maintains a ring buffer of recent tokens.
 - When a trigger delimiter is typed, the hook posts a window message WM_APP_AUTOCONVERT.
-- The UI thread handles WM_APP_AUTOCONVERT and calls autoconvert_last_word when not paused.
+- The UI thread handles WM_APP_AUTOCONVERT and calls autoconvert_last_word only when Autoconvert enabled is true.
 - A guard prevents double conversion of the same token.
 
-### Pause
+### Autoconvert toggle
 
-- Pause toggles state.paused.
-- When paused:
-  - autoconvert is disabled
-  - hotkeys and manual conversion actions still work
-- Pause toggling currently shows an informational tray balloon if the tray is available.
+- The toggle hotkey flips runtime Autoconvert enabled.
+- Autoconvert enabled default is disabled on app start.
+- Toggling shows an informational tray balloon.
 
 ## UI
 
@@ -121,24 +121,24 @@ Native Win32 UI with 2 tabs:
 
 ### Settings tab
 - Start on startup (checkbox)
-- Show tray icon (checkbox)
 - Delay ms (edit box)
 
 ### Hotkeys tab
 - Read only displays for:
   - Convert last word (sequence)
   - Convert selection
-  - Pause
+  - Autoconvert toggle
   - Switch layout
 
 Buttons:
 - Apply: persists config and applies runtime changes
 - Cancel: reloads config from disk and applies it to UI and runtime
 - Exit: closes the application
+- GitHub: opens repository page (for issues and contribution)
 
 ## Tray icon
 
-- When enabled, a tray icon is added via Shell_NotifyIconW.
+- A tray icon is always added via Shell_NotifyIconW.
 - Right click shows a context menu:
   - Show or Hide (toggles window visibility)
   - Exit
@@ -153,15 +153,15 @@ Buttons:
 ## Notifications and errors
 
 - Info notifications use tray balloon where possible.
-- Error notifications are queued and drained on the UI thread.
+- Error notifications are queued and drained on the UI thread via a single entry point.
 - Fallback for tray failure is MessageBoxW.
+- Notifications must not block hotkey critical paths.
 
 ## Logging
 
 Current behavior:
 - A tracing subscriber is installed on startup.
 - Logs are written to ./logs/output.log with hourly rotation.
-- This currently happens in all build modes.
 
 Planned change (tracked in roadmap):
 - Disable file logging in release builds by default, or gate it behind a feature or env var.
@@ -169,7 +169,5 @@ Planned change (tracked in roadmap):
 ## Known issues
 
 These are current code behavior issues, not design goals:
-- start_on_startup and are not applied automatically on app startup.
+- start_on_startup and autostart shortcut sync may not be applied automatically on app startup.
   They are applied after Apply or Cancel.
-- Tray notifications may be attempted even when tray icon is disabled, which can lead to failures.
-- Notifications can block the UI thread (MessageBox fallback), which can slow hotkey handling.

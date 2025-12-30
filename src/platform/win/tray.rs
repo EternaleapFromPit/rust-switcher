@@ -19,28 +19,18 @@ use windows::{
     core::{BOOL, PCWSTR, Result},
 };
 
+pub enum TrayMenuAction {
+    None,
+    SetAutoConvert(bool),
+}
+
+const ID_AUTOCONVERT_ON: u32 = 1003;
+const ID_AUTOCONVERT_OFF: u32 = 1004;
+
 pub const WM_APP_TRAY: u32 = WM_APP + 3;
 const TRAY_UID: u32 = 1;
 const ID_EXIT: u32 = 1001;
 const ID_SHOW_HIDE: u32 = 1002;
-
-pub fn show_tray_context_menu(hwnd: HWND, window_visible: bool) -> Result<()> {
-    unsafe {
-        let hmenu = build_tray_menu(window_visible)?;
-        let cmd = show_popup_menu_at_cursor(hwnd, hmenu);
-        let _ = DestroyMenu(hmenu);
-        handle_tray_menu_cmd(hwnd, window_visible, cmd)?;
-        Ok(())
-    }
-}
-
-fn build_tray_menu(window_visible: bool) -> Result<HMENU> {
-    let hmenu = unsafe { CreatePopupMenu() }?;
-    (unsafe { insert_show_hide_item(hmenu, window_visible) })?;
-    (unsafe { insert_separator(hmenu, 1) })?;
-    (unsafe { insert_exit_item(hmenu) })?;
-    Ok(hmenu)
-}
 
 unsafe fn insert_show_hide_item(hmenu: HMENU, window_visible: bool) -> Result<()> {
     let text = if window_visible { "Hide\0" } else { "Show\0" };
@@ -87,15 +77,6 @@ unsafe fn show_popup_menu_at_cursor(hwnd: HWND, hmenu: HMENU) -> BOOL {
             None,
         )
     }
-}
-
-unsafe fn handle_tray_menu_cmd(hwnd: HWND, window_visible: bool, cmd: BOOL) -> Result<()> {
-    match cmd.0.cast_unsigned() {
-        ID_SHOW_HIDE => unsafe { toggle_window_visibility(hwnd, window_visible) },
-        ID_EXIT => unsafe { request_window_close(hwnd) }?,
-        _ => {}
-    }
-    Ok(())
 }
 
 unsafe fn toggle_window_visibility(hwnd: HWND, window_visible: bool) {
@@ -311,5 +292,102 @@ pub fn remove_icon(hwnd: HWND) {
         };
 
         let _ = Shell_NotifyIconW(NIM_DELETE, &raw const nid);
+    }
+}
+
+pub fn show_tray_context_menu(
+    hwnd: HWND,
+    window_visible: bool,
+    autoconvert_enabled: bool,
+) -> Result<TrayMenuAction> {
+    unsafe {
+        let hmenu = build_tray_menu(window_visible, autoconvert_enabled)?;
+        let cmd = show_popup_menu_at_cursor(hwnd, hmenu);
+        let _ = DestroyMenu(hmenu);
+        handle_tray_menu_cmd(hwnd, window_visible, cmd)
+    }
+}
+
+fn build_tray_menu(window_visible: bool, autoconvert_enabled: bool) -> Result<HMENU> {
+    let hmenu = unsafe { CreatePopupMenu() }?;
+
+    unsafe { insert_autoconvert_on_item(hmenu, autoconvert_enabled) }?;
+    unsafe { insert_autoconvert_off_item(hmenu, autoconvert_enabled) }?;
+    unsafe { insert_separator(hmenu, 2) }?;
+
+    unsafe { insert_show_hide_item(hmenu, window_visible) }?;
+    unsafe { insert_separator(hmenu, 4) }?;
+
+    unsafe { insert_exit_item(hmenu) }?;
+
+    Ok(hmenu)
+}
+
+unsafe fn insert_autoconvert_on_item(hmenu: HMENU, autoconvert_enabled: bool) -> Result<()> {
+    let text = "AutoConvert: ON\0";
+    let wide = text.encode_utf16().collect::<Vec<u16>>();
+
+    let check_flag = if autoconvert_enabled {
+        windows::Win32::UI::WindowsAndMessaging::MF_CHECKED
+    } else {
+        windows::Win32::UI::WindowsAndMessaging::MF_UNCHECKED
+    };
+
+    unsafe {
+        InsertMenuW(
+            hmenu,
+            0,
+            MF_STRING | check_flag,
+            ID_AUTOCONVERT_ON as usize,
+            PCWSTR(wide.as_ptr()),
+        )
+    }?;
+
+    Ok(())
+}
+
+unsafe fn insert_autoconvert_off_item(hmenu: HMENU, autoconvert_enabled: bool) -> Result<()> {
+    let text = "AutoConvert: OFF\0";
+    let wide = text.encode_utf16().collect::<Vec<u16>>();
+
+    let check_flag = if !autoconvert_enabled {
+        windows::Win32::UI::WindowsAndMessaging::MF_CHECKED
+    } else {
+        windows::Win32::UI::WindowsAndMessaging::MF_UNCHECKED
+    };
+
+    unsafe {
+        InsertMenuW(
+            hmenu,
+            0,
+            MF_STRING | check_flag,
+            ID_AUTOCONVERT_OFF as usize,
+            PCWSTR(wide.as_ptr()),
+        )
+    }?;
+
+    Ok(())
+}
+
+unsafe fn handle_tray_menu_cmd(
+    hwnd: HWND,
+    window_visible: bool,
+    cmd: BOOL,
+) -> Result<TrayMenuAction> {
+    match cmd.0.cast_unsigned() {
+        ID_AUTOCONVERT_ON => Ok(TrayMenuAction::SetAutoConvert(true)),
+        ID_AUTOCONVERT_OFF => Ok(TrayMenuAction::SetAutoConvert(false)),
+
+        ID_SHOW_HIDE => {
+            unsafe { toggle_window_visibility(hwnd, window_visible) };
+            Ok(TrayMenuAction::None)
+        }
+
+        ID_EXIT => {
+            unsafe { request_window_close(hwnd) }?;
+            Ok(TrayMenuAction::None)
+        }
+
+        _ => Ok(TrayMenuAction::None),
     }
 }

@@ -22,9 +22,10 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             DefWindowProcW, GWLP_USERDATA, GetWindowLongPtrW, PostQuitMessage, SW_SHOW,
-            SetWindowLongPtrW, ShowWindow, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORDLG,
-            WM_CTLCOLORSTATIC, WM_DESTROY, WM_HOTKEY, WM_TIMER, WS_MAXIMIZEBOX,
-            WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
+            SetWindowLongPtrW, ShowWindow, WM_COMMAND, WM_CONTEXTMENU, WM_CREATE, WM_CTLCOLORBTN,
+            WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_HOTKEY, WM_LBUTTONDBLCLK,
+            WM_LBUTTONUP, WM_RBUTTONUP, WM_TIMER, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW,
+            WS_THICKFRAME,
         },
     },
     core::{PCWSTR, Result, w},
@@ -44,17 +45,35 @@ use crate::{
     input::hotkeys::{HotkeyAction, action_from_id},
     platform::{
         ui::{
-            error_notifier::{T_CONFIG, T_UI, drain_one_and_present},
-            {self},
-        },
-        win::{
             self,
-            tray::{WM_APP_TRAY, balloon_info, remove_icon},
+            error_notifier::{T_CONFIG, T_UI, drain_one_and_present},
         },
+        win::tray::{WM_APP_TRAY, remove_icon},
     },
     ui_call, ui_try,
     utils::helpers,
 };
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum TrayEvent {
+    LeftClick,
+    RightClick,
+    DoubleClick,
+    Unknown,
+}
+
+fn tray_event_from_lparam(lparam: u32) -> TrayEvent {
+    match lparam {
+        WM_LBUTTONUP => TrayEvent::LeftClick,
+        WM_LBUTTONDBLCLK => TrayEvent::DoubleClick,
+        WM_RBUTTONUP | WM_CONTEXTMENU => TrayEvent::RightClick,
+
+        // NOTIFYICON_VERSION_4: NIN_SELECT and NIN_KEYSELECT are WM_USER + 0/1.
+        0x0400 | 0x0401 => TrayEvent::LeftClick,
+
+        _ => TrayEvent::Unknown,
+    }
+}
 
 fn set_hwnd_text(hwnd: HWND, s: &str) -> windows::core::Result<()> {
     helpers::set_edit_text(hwnd, s)
@@ -243,6 +262,10 @@ fn on_create(hwnd: HWND) -> LRESULT {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
     }
 
+    if let Err(e) = crate::platform::win::tray::ensure_icon(hwnd) {
+        tracing::warn!(error = ?e, "tray ensure_icon failed");
+    }
+
     #[cfg(debug_assertions)]
     with_state_mut_do(hwnd, |state| {
         helpers::debug_startup_notification(hwnd, state);
@@ -324,24 +347,62 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             LRESULT(0)
         }
 
-        WM_APP_TRAY => {
-            let lparam_val = lparam.0 as u32;
+        WM_APP_TRAY => handle_tray_message(hwnd, wparam, lparam),
 
-            match lparam_val {
-                0x1007b => {
-                    let window_visible = unsafe {
-                        windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool()
-                    };
-                    let _ =
-                        crate::platform::win::tray::show_tray_context_menu(hwnd, window_visible);
-                }
-                _ => return LRESULT(0),
-            }
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+fn handle_tray_message(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let raw = lparam.0 as u32;
+    let event = tray_event_from_lparam(raw);
+
+    tracing::debug!(
+        msg = "wm_app_tray",
+        wparam = wparam.0,
+        lparam = lparam.0,
+        raw = raw,
+        event = ?event
+    );
+
+    match event {
+        TrayEvent::LeftClick => {
+            with_state_mut_do(hwnd, |state| {
+                handle_pause_toggle(hwnd, state);
+            });
+            LRESULT(0)
+        }
+
+        TrayEvent::DoubleClick => {
+            toggle_window_visibility_from_tray(hwnd);
+            LRESULT(0)
+        }
+
+        TrayEvent::RightClick => {
+            let window_visible =
+                unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool() };
+
+            with_state_mut_do(
+                hwnd,
+                |state| match crate::platform::win::tray::show_tray_context_menu(
+                    hwnd,
+                    window_visible,
+                    state.autoconvert_enabled,
+                ) {
+                    Ok(action) => match action {
+                        crate::platform::win::tray::TrayMenuAction::None => {}
+                        crate::platform::win::tray::TrayMenuAction::SetAutoConvert(enabled) => {
+                            set_autoconvert_enabled_from_tray(hwnd, state, enabled);
+                        }
+                    },
+                    Err(e) => tracing::warn!(error = ?e, "tray menu failed"),
+                },
+            );
 
             LRESULT(0)
         }
 
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        TrayEvent::Unknown => LRESULT(0),
     }
 }
 
@@ -477,25 +538,8 @@ pub fn hotkey_id_from_wparam(wparam: WPARAM) -> i32 {
 }
 
 fn handle_pause_toggle(hwnd: HWND, state: &mut AppState) {
-    state.autoconvert_enabled = !state.autoconvert_enabled;
-
-    let hotkey_text = if state.hotkey_sequence_values.pause.is_some() {
-        format_hotkey_sequence(state.hotkey_sequence_values.pause)
-    } else {
-        format_hotkey(state.hotkey_values.pause)
-    };
-
-    let body = if state.autoconvert_enabled {
-        format!("Status: active.\nAuto convert: ON.\nToggle: {hotkey_text}")
-    } else {
-        format!("Status: paused.\nAuto convert: OFF.\nToggle: {hotkey_text}")
-    };
-
-    if let Err(e) = balloon_info(hwnd, "RustSwitcher", &body) {
-        tracing::warn!(error = ?e, "tray balloon failed");
-    }
-
-    let _ = win::tray::switch_tray_icon(hwnd, state.autoconvert_enabled);
+    let enabled = !state.autoconvert_enabled;
+    set_autoconvert_enabled_from_tray(hwnd, state, enabled);
 }
 
 fn handle_convert_smart(state: &mut AppState) {
@@ -561,4 +605,53 @@ fn on_timer(_hwnd: HWND, _wparam: WPARAM) -> LRESULT {
     }
 
     LRESULT(0)
+}
+
+fn toggle_window_visibility_from_tray(hwnd: windows::Win32::Foundation::HWND) {
+    unsafe {
+        let visible = windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool();
+        if visible {
+            let _ = windows::Win32::UI::WindowsAndMessaging::ShowWindow(
+                hwnd,
+                windows::Win32::UI::WindowsAndMessaging::SW_HIDE,
+            );
+        } else {
+            let _ = windows::Win32::UI::WindowsAndMessaging::ShowWindow(
+                hwnd,
+                windows::Win32::UI::WindowsAndMessaging::SW_SHOW,
+            );
+        }
+    }
+}
+
+fn set_autoconvert_enabled_from_tray(
+    hwnd: windows::Win32::Foundation::HWND,
+    state: &mut crate::app::AppState,
+    enabled: bool,
+) {
+    if state.autoconvert_enabled == enabled {
+        return;
+    }
+
+    state.autoconvert_enabled = enabled;
+
+    if let Err(e) = crate::platform::win::tray::switch_tray_icon(hwnd, enabled) {
+        tracing::warn!(error = ?e, "switch_tray_icon failed");
+    }
+
+    let hotkey_text = if state.hotkey_sequence_values.pause.is_some() {
+        crate::platform::win::format_hotkey_sequence(state.hotkey_sequence_values.pause)
+    } else {
+        crate::platform::win::format_hotkey(state.hotkey_values.pause)
+    };
+
+    let body = if enabled {
+        format!("Status: active.\nAuto convert: ON.\nToggle: {hotkey_text}")
+    } else {
+        format!("Status: paused.\nAuto convert: OFF.\nToggle: {hotkey_text}")
+    };
+
+    if let Err(e) = crate::platform::win::tray::balloon_info(hwnd, "RustSwitcher", &body) {
+        tracing::warn!(error = ?e, "tray balloon failed");
+    }
 }
