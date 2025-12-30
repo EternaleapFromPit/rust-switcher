@@ -43,6 +43,11 @@ static LAST_KEY: AtomicU64 = AtomicU64::new(0);
 static LAST_MS: AtomicU64 = AtomicU64::new(0);
 
 pub fn on_wm_app_notify(hwnd: windows::Win32::Foundation::HWND) {
+    // WM_APP_NOTIFY доставлен, значит "сообщение в полете" больше не актуально.
+    // Если очередь за этот тик опустеет полностью, новые push должны снова иметь
+    // возможность запостить WM_APP_NOTIFY.
+    POSTED.store(false, Ordering::Release);
+
     backend::on_wm_app_notify(hwnd);
 }
 

@@ -1,9 +1,10 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::{
-    config,
+    config::{self, MODVK_LCTRL, MODVK_RALT},
     platform::win::keyboard::vk::{mod_bit_for_vk, mod_vk_bit_for_vk},
 };
+
 static MODS_DOWN: AtomicU32 = AtomicU32::new(0);
 static MODVKS_DOWN: AtomicU32 = AtomicU32::new(0);
 
@@ -27,7 +28,13 @@ pub(crate) fn update_mods_down_release(vk: u32) {
 
 pub(crate) fn chord_from_vk(vk: u32) -> config::HotkeyChord {
     let mods = MODS_DOWN.load(Ordering::Relaxed);
-    let mods_vks = MODVKS_DOWN.load(Ordering::Relaxed);
+    let mut mods_vks = MODVKS_DOWN.load(Ordering::Relaxed);
+
+    // Windows AltGr often arrives as RAlt + LCtrl
+    if (mods_vks & MODVK_RALT) != 0 {
+        mods_vks &= !MODVK_LCTRL;
+    }
+
     config::HotkeyChord {
         mods,
         mods_vks,

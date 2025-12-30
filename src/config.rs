@@ -38,11 +38,8 @@ pub struct HotkeyChord {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HotkeySequence {
-    // Всегда есть первый аккорд
     pub first: HotkeyChord,
-    // Второй аккорд опционален (если None, то это обычная хоткея из одного аккорда)
     pub second: Option<HotkeyChord>,
-    // Максимальная пауза между first и second
     pub max_gap_ms: u32,
 }
 
@@ -50,11 +47,11 @@ pub struct HotkeySequence {
 pub struct Config {
     pub start_on_startup: bool,
     pub delay_ms: u32,
+
     pub hotkey_convert_last_word: Option<Hotkey>,
     pub hotkey_convert_selection: Option<Hotkey>,
     pub hotkey_switch_layout: Option<Hotkey>,
     pub hotkey_pause: Option<Hotkey>,
-    pub autoconvert_enabled: bool,
 
     #[serde(default)]
     pub hotkey_convert_last_word_sequence: Option<HotkeySequence>,
@@ -71,11 +68,11 @@ impl Default for Config {
         Self {
             start_on_startup: false,
             delay_ms: 100,
+
             hotkey_switch_layout: None,
             hotkey_pause: None,
             hotkey_convert_last_word: None,
             hotkey_convert_selection: None,
-            autoconvert_enabled: false,
 
             hotkey_convert_last_word_sequence: Some(HotkeySequence {
                 first: HotkeyChord {

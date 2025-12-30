@@ -245,10 +245,6 @@ fn on_create(hwnd: HWND) -> LRESULT {
 
     #[cfg(debug_assertions)]
     with_state_mut_do(hwnd, |state| {
-        use std::{thread::sleep, time};
-
-        helpers::debug_startup_notification(hwnd, state);
-        sleep(time::Duration::from_millis(2000));
         helpers::debug_startup_notification(hwnd, state);
     });
 
@@ -380,25 +376,12 @@ impl ApplyConfigError {
     }
 }
 
-/// Builds a config from the current UI state and persists it.
-///
-/// Responsibilities:
-/// - loads the current config as a base (so unspecified fields are preserved)
-/// - reads UI controls into a new config instance
-/// - saves the config to persistent storage
-///
-/// Error semantics:
-/// Returns an `ApplyConfigError` that is suitable for direct user notification.
-/// In particular, validation failures are reported with the validation message as `user_text`.
 fn build_and_save_config_from_ui(
     state: &mut AppState,
 ) -> std::result::Result<config::Config, ApplyConfigError> {
-    let base = config::load().map_err(|e| ApplyConfigError {
-        user_text: "Failed to load config before applying changes".to_string(),
-        source: io_to_win(e),
-    })?;
-
-    let cfg = read_ui_to_config(state, base);
+    // Apply must not depend on reading existing config file.
+    // Build a fresh config from UI and overwrite on disk.
+    let cfg = read_ui_to_config(state, config::Config::default());
 
     config::save(&cfg).map_err(|e| {
         let user_text = match e.kind() {
@@ -451,20 +434,23 @@ fn handle_apply(hwnd: HWND, state: &mut AppState) {
 }
 
 fn handle_cancel(hwnd: HWND, state: &mut AppState) {
-    let cfg = match config::load() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            let e = io_to_win(e);
-            crate::platform::ui::error_notifier::push(hwnd, state, "", "Failed to load config", &e);
-            on_app_error(hwnd);
-            return;
-        }
-    };
+    let cfg = config::load().unwrap_or_default();
 
-    #[rustfmt::skip]
-    ui_call!(hwnd, state, T_CONFIG, "Failed to apply config at runtime", apply_config_runtime(hwnd, state, &cfg));
-    #[rustfmt::skip]
-    ui_call!(hwnd, state, T_UI, "Failed to update UI from config", apply_config_to_ui(state, &cfg));
+    ui_call!(
+        hwnd,
+        state,
+        T_CONFIG,
+        "Failed to apply config at runtime",
+        apply_config_runtime(hwnd, state, &cfg)
+    );
+
+    ui_call!(
+        hwnd,
+        state,
+        T_UI,
+        "Failed to update UI from config",
+        apply_config_to_ui(state, &cfg)
+    );
 }
 
 unsafe fn on_ncdestroy(hwnd: HWND) -> LRESULT {

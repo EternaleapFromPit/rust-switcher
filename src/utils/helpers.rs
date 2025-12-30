@@ -201,16 +201,18 @@ pub fn debug_log(msg: &str) {
 }
 
 #[cfg(debug_assertions)]
-pub fn debug_startup_notification(
-    hwnd: windows::Win32::Foundation::HWND,
-    _state: &mut crate::app::AppState,
-) {
+pub fn debug_startup_notification(hwnd: HWND, _state: &mut crate::app::AppState) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use windows::Win32::UI::WindowsAndMessaging::SetTimer;
+
+    static STARTUP_NOTIFS_ARMED: AtomicBool = AtomicBool::new(false);
+    if STARTUP_NOTIFS_ARMED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
     unsafe {
-        let _ = windows::Win32::UI::WindowsAndMessaging::SetTimer(
-            Some(hwnd),
-            DEBUG_TIMER_ID_STARTUP_ERROR,
-            800,
-            None,
-        );
+        let _ = SetTimer(Some(hwnd), DEBUG_TIMER_ID_STARTUP_ERROR, 200, None);
+        let _ = SetTimer(Some(hwnd), DEBUG_TIMER_ID_STARTUP_INFO, 800, None);
     }
 }
