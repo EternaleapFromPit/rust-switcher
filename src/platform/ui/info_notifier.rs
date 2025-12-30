@@ -1,11 +1,7 @@
-#[cfg(debug_assertions)]
-pub fn push(
-    hwnd: windows::Win32::Foundation::HWND,
-    _state: &mut crate::app::AppState,
-    title: &str,
-    text: &str,
-) {
-    use crate::platform::win::tray::balloon_info;
+use windows::Win32::Foundation::HWND;
 
-    let _ = balloon_info(hwnd, title, text);
+use crate::app::AppState;
+
+pub fn push(hwnd: HWND, _state: &mut AppState, title: &str, text: &str) {
+    crate::platform::ui::notify::push_info(hwnd, title, text);
 }

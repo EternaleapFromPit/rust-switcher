@@ -151,7 +151,7 @@ pub struct AppState {
     pub hotkeys: HotkeyEdits,
     pub buttons: Buttons,
 
-    pub paused: bool,
+    pub autoconvert_enabled: bool,
     pub errors: VecDeque<UiError>,
 
     /// Temporary hotkeys currently shown in UI. Committed on Apply.

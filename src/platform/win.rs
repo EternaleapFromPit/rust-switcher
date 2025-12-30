@@ -14,7 +14,6 @@ mod state;
 pub(crate) mod tray;
 mod visuals;
 mod window;
-
 pub(crate) use hotkey_format::{format_hotkey, format_hotkey_sequence};
 use windows::{
     Win32::{
@@ -42,11 +41,11 @@ use crate::{
     app::AppState,
     config,
     domain::text::{last_word::autoconvert_last_word, switch_keyboard_layout},
-    input::hotkeys::{HotkeyAction, action_from_id, register_from_config},
+    input::hotkeys::{HotkeyAction, action_from_id},
     platform::{
         ui::{
-            self,
             error_notifier::{T_CONFIG, T_UI, drain_one_and_present},
+            {self},
         },
         win::{
             self,
@@ -130,7 +129,7 @@ fn read_ui_to_config(state: &AppState, mut cfg: config::Config) -> config::Confi
         state.hotkey_values.selection,
     );
     cfg.hotkey_switch_layout = match cfg.hotkey_switch_layout_sequence {
-        Some(_) => None, // РІР°Р¶РЅРѕ: С‚РѕР»СЊРєРѕ LL hook, РёРЅР°С‡Рµ Windows РЅРµ РѕС‚Р»РёС‡РёС‚ LShift РѕС‚ RShift
+        Some(_) => None,
         None => state.hotkey_values.switch_layout,
     };
 
@@ -142,31 +141,27 @@ fn apply_config_runtime(
     state: &mut AppState,
     cfg: &config::Config,
 ) -> windows::core::Result<()> {
-    state.paused = cfg.paused;
+    state.autoconvert_enabled = false;
 
-    // Tray icon state must follow config
     if cfg.show_tray_icon {
         crate::platform::win::tray::ensure_icon(hwnd)?;
+        let toggled = !state.autoconvert_enabled;
+        let _ = crate::platform::win::tray::switch_tray_icon(hwnd, toggled);
     } else {
         crate::platform::win::tray::remove_icon(hwnd);
     }
 
-    // Autostart shortcut is idempotent: cleans old + creates or only cleans
     crate::platform::win::autostart::apply_startup_shortcut(cfg.start_on_startup)?;
 
-    // Critical: refresh runtime hotkey matcher inputs
     state.active_hotkey_sequences = crate::app::HotkeySequenceValues::from_config(cfg);
 
-    // Reset runtime progress to avoid stale "waiting_second" and pending-mod state
     state.runtime_chord_capture = crate::app::RuntimeChordCapture::default();
     state.hotkey_sequence_progress = crate::app::HotkeySequenceProgress::default();
 
-    // Legacy fields (можно будет удалить позже)
     state.active_switch_layout_sequence = cfg.hotkey_switch_layout_sequence;
     state.switch_layout_waiting_second = false;
     state.switch_layout_first_tick_ms = 0;
 
-    // Registering system hotkeys can legitimately fail for modifier-only bindings
     ui_try!(
         hwnd,
         state,
@@ -247,7 +242,7 @@ fn on_create(hwnd: HWND) -> LRESULT {
     startup_or_return0!(hwnd, &mut state, "Failed to apply config to UI", apply_config_to_ui(state.as_mut(), &cfg));
 
     #[rustfmt::skip]
-    startup_or_return0!(hwnd, &mut state, "Failed to register hotkeys", register_from_config(hwnd, &cfg));
+    startup_or_return0!(hwnd, &mut state, "Failed to apply config at runtime", apply_config_runtime(hwnd, state.as_mut(), &cfg));
 
     keyboard::install(hwnd, state.as_mut());
     mouse::install();
@@ -305,7 +300,7 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
 
     match msg {
         WM_CREATE => on_create(hwnd),
-        WM_COMMAND => commands::on_command(hwnd, wparam, lparam),
+        WM_COMMAND => commands::on_command(hwnd, wparam),
         WM_HOTKEY => on_hotkey(hwnd, wparam),
         WM_TIMER => on_timer(hwnd, wparam),
         WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
@@ -316,19 +311,33 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
             LRESULT(0)
         }
         WM_NCDESTROY => unsafe { on_ncdestroy(hwnd) },
+
+        crate::platform::ui::notify::WM_APP_NOTIFY => {
+            crate::platform::ui::notify::on_wm_app_notify(hwnd);
+            LRESULT(0)
+        }
+
+        crate::platform::ui::error_notifier::WM_APP_ERROR => {
+            with_state_mut_do(hwnd, |state| {
+                crate::platform::ui::error_notifier::drain_one_and_present(hwnd, state);
+            });
+            LRESULT(0)
+        }
+
         crate::platform::ui::error_notifier::WM_APP_AUTOCONVERT => {
             if crate::input::ring_buffer::last_token_autoconverted() {
                 return LRESULT(0);
             }
 
             with_state_mut_do(hwnd, |state| {
-                if !state.paused {
+                if state.autoconvert_enabled {
                     autoconvert_last_word(state);
                 }
             });
 
             LRESULT(0)
         }
+
         WM_APP_TRAY => {
             let lparam_val = lparam.0 as u32;
 
@@ -345,6 +354,7 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
 
             LRESULT(0)
         }
+
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
@@ -491,7 +501,7 @@ pub fn hotkey_id_from_wparam(wparam: WPARAM) -> i32 {
 }
 
 fn handle_pause_toggle(hwnd: HWND, state: &mut AppState) {
-    state.paused = !state.paused;
+    state.autoconvert_enabled = !state.autoconvert_enabled;
 
     let hotkey_text = if state.hotkey_sequence_values.pause.is_some() {
         format_hotkey_sequence(state.hotkey_sequence_values.pause)
@@ -499,22 +509,17 @@ fn handle_pause_toggle(hwnd: HWND, state: &mut AppState) {
         format_hotkey(state.hotkey_values.pause)
     };
 
-    let toggled;
-
-    let body = if state.paused {
-        toggled = false;
-        format!("Status: paused.\nAuto convert: OFF.\nToggle: {hotkey_text}")
-    } else {
-        toggled = true;
+    let body = if state.autoconvert_enabled {
         format!("Status: active.\nAuto convert: ON.\nToggle: {hotkey_text}")
+    } else {
+        format!("Status: paused.\nAuto convert: OFF.\nToggle: {hotkey_text}")
     };
 
     if let Err(e) = balloon_info(hwnd, "RustSwitcher", &body) {
-        #[cfg(debug_assertions)]
         tracing::warn!(error = ?e, "tray balloon failed");
     }
 
-    let _ = win::tray::switch_tray_icon(hwnd, toggled);
+    let _ = win::tray::switch_tray_icon(hwnd, state.autoconvert_enabled);
 }
 
 fn handle_convert_smart(state: &mut AppState) {

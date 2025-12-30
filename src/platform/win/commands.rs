@@ -1,5 +1,5 @@
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+    Foundation::{HWND, LRESULT, WPARAM},
     UI::WindowsAndMessaging::{BN_CLICKED, DestroyWindow, EN_KILLFOCUS, EN_SETFOCUS},
 };
 
@@ -10,17 +10,9 @@ use crate::{app::ControlId, platform::ui::error_notifier::T_UI, utils::helpers};
     debug_assertions,
     tracing::instrument(level = "info", skip_all, fields(msg, id, notif))
 )]
-pub(crate) fn on_command(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    #[cfg(debug_assertions)]
-    tracing::Span::current().record("msg", "WM_COMMAND");
-
+pub(crate) fn on_command(hwnd: HWND, wparam: WPARAM) -> LRESULT {
     let id = i32::from(helpers::loword(wparam.0));
     let notif = u32::from(helpers::hiword(wparam.0));
-
-    #[cfg(debug_assertions)]
-    {
-        tracing::trace!(id, notif, lparam = lparam.0 as i64, "ui.command");
-    }
 
     if let Some(r) = handle_hotkey_capture_focus(hwnd, id, notif) {
         return r;

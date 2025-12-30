@@ -2,6 +2,7 @@ pub mod colors;
 pub mod error_notifier;
 pub mod geom;
 pub mod info_notifier;
+pub mod notify;
 
 use windows::{
     Win32::{

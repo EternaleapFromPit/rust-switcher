@@ -55,7 +55,7 @@ pub struct Config {
     pub hotkey_convert_selection: Option<Hotkey>,
     pub hotkey_switch_layout: Option<Hotkey>,
     pub hotkey_pause: Option<Hotkey>,
-    pub paused: bool,
+    pub autoconvert_enabled: bool,
 
     #[serde(default)]
     pub hotkey_convert_last_word_sequence: Option<HotkeySequence>,
@@ -77,7 +77,7 @@ impl Default for Config {
             hotkey_pause: None,
             hotkey_convert_last_word: None,
             hotkey_convert_selection: None,
-            paused: false,
+            autoconvert_enabled: false,
 
             hotkey_convert_last_word_sequence: Some(HotkeySequence {
                 first: HotkeyChord {
