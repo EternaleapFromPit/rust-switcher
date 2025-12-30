@@ -62,7 +62,6 @@ fn set_hwnd_text(hwnd: HWND, s: &str) -> windows::core::Result<()> {
 
 fn apply_config_to_ui(state: &mut AppState, cfg: &config::Config) -> windows::core::Result<()> {
     helpers::set_checkbox(state.checkboxes.autostart, cfg.start_on_startup);
-    helpers::set_checkbox(state.checkboxes.tray, cfg.show_tray_icon);
     helpers::set_edit_u32(state.edits.delay_ms, cfg.delay_ms)?;
 
     state.hotkey_values = crate::app::HotkeyValues::from_config(cfg);
@@ -101,7 +100,6 @@ fn apply_config_to_ui(state: &mut AppState, cfg: &config::Config) -> windows::co
 
 fn read_ui_to_config(state: &AppState, mut cfg: config::Config) -> config::Config {
     cfg.start_on_startup = helpers::get_checkbox(state.checkboxes.autostart);
-    cfg.show_tray_icon = helpers::get_checkbox(state.checkboxes.tray);
     cfg.delay_ms = helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(cfg.delay_ms);
 
     cfg.hotkey_convert_last_word_sequence = state.hotkey_sequence_values.last_word;
@@ -142,14 +140,6 @@ fn apply_config_runtime(
     cfg: &config::Config,
 ) -> windows::core::Result<()> {
     state.autoconvert_enabled = false;
-
-    if cfg.show_tray_icon {
-        crate::platform::win::tray::ensure_icon(hwnd)?;
-        let toggled = !state.autoconvert_enabled;
-        let _ = crate::platform::win::tray::switch_tray_icon(hwnd, toggled);
-    } else {
-        crate::platform::win::tray::remove_icon(hwnd);
-    }
 
     crate::platform::win::autostart::apply_startup_shortcut(cfg.start_on_startup)?;
 

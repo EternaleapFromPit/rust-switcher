@@ -45,7 +45,6 @@ It is intended as onboarding documentation and as a reference for expected runti
 
 Config fields (see src/config.rs):
 - start_on_startup: bool
-- show_tray_icon: bool
 - delay_ms: u32
 - paused: bool
 - Hotkeys (legacy single chord, optional):
@@ -170,7 +169,7 @@ Planned change (tracked in roadmap):
 ## Known issues
 
 These are current code behavior issues, not design goals:
-- start_on_startup and show_tray_icon are not applied automatically on app startup.
+- start_on_startup and are not applied automatically on app startup.
   They are applied after Apply or Cancel.
 - Tray notifications may be attempted even when tray icon is disabled, which can lead to failures.
 - Notifications can block the UI thread (MessageBox fallback), which can slow hotkey handling.

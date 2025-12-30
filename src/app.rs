@@ -179,7 +179,6 @@ pub struct AppState {
 #[derive(Debug, Default)]
 pub struct Checkboxes {
     pub autostart: HWND,
-    pub tray: HWND,
 }
 
 #[derive(Debug, Default)]
