@@ -1,6 +1,6 @@
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, POINT, WPARAM},
+        Foundation::{HINSTANCE, HWND, POINT},
         UI::{
             Shell::{
                 NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_ERROR, NIIF_INFO,
@@ -8,11 +8,11 @@ use windows::{
                 NOTIFY_ICON_MESSAGE, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
             },
             WindowsAndMessaging::{
-                CreatePopupMenu, DestroyMenu, GWLP_HINSTANCE, GetCursorPos, GetWindowLongPtrW,
-                HICON, HMENU, IMAGE_ICON, InsertMenuW, LR_SHARED, LoadImageW, MF_SEPARATOR,
-                MF_STRING, PostMessageW, SW_HIDE, SW_SHOW, SetForegroundWindow, ShowWindow,
-                TPM_BOTTOMALIGN, TPM_NOANIMATION, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON,
-                TrackPopupMenu, WM_APP, WM_CLOSE,
+                AppendMenuW, CreatePopupMenu, DestroyMenu, GWLP_HINSTANCE, GetCursorPos,
+                GetWindowLongPtrW, HICON, HMENU, IMAGE_ICON, LR_SHARED, LoadImageW, MF_SEPARATOR,
+                SW_HIDE, SW_SHOW, SetForegroundWindow, ShowWindow, TPM_BOTTOMALIGN,
+                TPM_NOANIMATION, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
+                WM_APP,
             },
         },
     },
@@ -21,44 +21,15 @@ use windows::{
 
 pub enum TrayMenuAction {
     None,
-    SetAutoConvert(bool),
+    ToggleAutoConvert,
 }
 
-const ID_AUTOCONVERT_ON: u32 = 1003;
-const ID_AUTOCONVERT_OFF: u32 = 1004;
+const ID_AUTOCONVERT_TOGGLE: u32 = 1003;
 
 pub const WM_APP_TRAY: u32 = WM_APP + 3;
 const TRAY_UID: u32 = 1;
 const ID_EXIT: u32 = 1001;
 const ID_SHOW_HIDE: u32 = 1002;
-
-unsafe fn insert_show_hide_item(hmenu: HMENU, window_visible: bool) -> Result<()> {
-    let text = if window_visible { "Hide\0" } else { "Show\0" };
-    let wide = text.encode_utf16().collect::<Vec<u16>>();
-
-    (unsafe {
-        InsertMenuW(
-            hmenu,
-            0,
-            MF_STRING,
-            ID_SHOW_HIDE as usize,
-            PCWSTR(wide.as_ptr()),
-        )
-    })?;
-
-    Ok(())
-}
-
-unsafe fn insert_exit_item(hmenu: HMENU) -> Result<()> {
-    let wide = "Exit\0".encode_utf16().collect::<Vec<u16>>();
-    (unsafe { InsertMenuW(hmenu, 0, MF_STRING, ID_EXIT as usize, PCWSTR(wide.as_ptr())) })?;
-    Ok(())
-}
-
-unsafe fn insert_separator(hmenu: HMENU, position: u32) -> Result<()> {
-    (unsafe { InsertMenuW(hmenu, position, MF_SEPARATOR, 0, PCWSTR::null()) })?;
-    Ok(())
-}
 
 unsafe fn show_popup_menu_at_cursor(hwnd: HWND, hmenu: HMENU) -> BOOL {
     let mut pt = POINT { x: 0, y: 0 };
@@ -88,8 +59,14 @@ unsafe fn toggle_window_visibility(hwnd: HWND, window_visible: bool) {
     }
 }
 
-unsafe fn request_window_close(hwnd: HWND) -> Result<()> {
-    (unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) })?;
+unsafe fn request_process_exit(hwnd: HWND) -> Result<()> {
+    // Сначала убрать иконку, чтобы Shell перестал слать callbacks.
+    remove_icon(hwnd);
+
+    // Жестко закрыть окно и остановить message loop.
+    let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(hwnd) };
+    unsafe { windows::Win32::UI::WindowsAndMessaging::PostQuitMessage(0) };
+
     Ok(())
 }
 
@@ -183,6 +160,71 @@ fn balloon_common(
     flags: u32,
     what: &str,
 ) -> windows::core::Result<()> {
+    use std::{
+        collections::hash_map::DefaultHasher,
+        hash::{Hash, Hasher},
+        sync::{Mutex, OnceLock},
+        time::{Duration, Instant},
+    };
+
+    #[derive(Default)]
+    struct Guard {
+        last_fp: u64,
+        last_at: Option<Instant>,
+        suppressed: u64,
+    }
+
+    static GUARD: OnceLock<Mutex<Guard>> = OnceLock::new();
+
+    fn fingerprint(title: &str, text: &str, flags: u32) -> u64 {
+        let mut h = DefaultHasher::new();
+        title.hash(&mut h);
+        text.hash(&mut h);
+        flags.hash(&mut h);
+        h.finish()
+    }
+
+    let fp = fingerprint(title, text, flags);
+
+    tracing::debug!(
+        msg = "tray_balloon_attempt",
+        title = title,
+        text = text,
+        flags = flags,
+    );
+
+    let now = Instant::now();
+
+    // No unwrap: clippy::unwrap-used is denied.
+    let guard_lock = GUARD.get_or_init(|| Mutex::new(Guard::default())).lock();
+    let mut guard = match guard_lock {
+        Ok(g) => Some(g),
+        Err(_) => {
+            tracing::warn!(msg = "tray_balloon_guard_lock_poisoned");
+            None
+        }
+    };
+
+    if let Some(g) = guard.as_mut() {
+        let too_soon = g
+            .last_at
+            .map(|t| now.duration_since(t) < Duration::from_millis(1500))
+            .unwrap_or(false);
+
+        if too_soon && g.last_fp == fp {
+            g.suppressed += 1;
+            tracing::debug!(
+                msg = "tray_balloon_suppressed",
+                suppressed_total = g.suppressed,
+                title = title
+            );
+            return Ok(());
+        }
+
+        g.last_fp = fp;
+        g.last_at = Some(now);
+    }
+
     ensure_icon(hwnd)?;
 
     let mut nid = NOTIFYICONDATAW {
@@ -201,6 +243,7 @@ fn balloon_common(
     fill_wide(&mut nid.szInfo, text);
 
     if unsafe { Shell_NotifyIconW(NIM_MODIFY, &raw const nid).as_bool() } {
+        tracing::debug!(msg = "tray_balloon_shown", title = title);
         return Ok(());
     }
 
@@ -304,67 +347,75 @@ pub fn show_tray_context_menu(
         let hmenu = build_tray_menu(window_visible, autoconvert_enabled)?;
         let cmd = show_popup_menu_at_cursor(hwnd, hmenu);
         let _ = DestroyMenu(hmenu);
-        handle_tray_menu_cmd(hwnd, window_visible, cmd)
+        handle_tray_menu_cmd(hwnd, window_visible, autoconvert_enabled, cmd)
     }
 }
 
 fn build_tray_menu(window_visible: bool, autoconvert_enabled: bool) -> Result<HMENU> {
     let hmenu = unsafe { CreatePopupMenu() }?;
 
-    unsafe { insert_autoconvert_on_item(hmenu, autoconvert_enabled) }?;
-    unsafe { insert_autoconvert_off_item(hmenu, autoconvert_enabled) }?;
-    unsafe { insert_separator(hmenu, 2) }?;
+    unsafe { append_autoconvert_toggle_item(hmenu, autoconvert_enabled) }?;
+    unsafe { AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null()) }?;
 
-    unsafe { insert_show_hide_item(hmenu, window_visible) }?;
-    unsafe { insert_separator(hmenu, 4) }?;
+    unsafe { append_show_hide_item(hmenu, window_visible) }?;
+    unsafe { AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null()) }?;
 
-    unsafe { insert_exit_item(hmenu) }?;
+    unsafe { append_exit_item(hmenu) }?;
 
     Ok(hmenu)
 }
 
-unsafe fn insert_autoconvert_on_item(hmenu: HMENU, autoconvert_enabled: bool) -> Result<()> {
-    let text = "AutoConvert: ON\0";
-    let wide = text.encode_utf16().collect::<Vec<u16>>();
-
-    let check_flag = if autoconvert_enabled {
-        windows::Win32::UI::WindowsAndMessaging::MF_CHECKED
-    } else {
-        windows::Win32::UI::WindowsAndMessaging::MF_UNCHECKED
+unsafe fn append_autoconvert_toggle_item(hmenu: HMENU, autoconvert_enabled: bool) -> Result<()> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, MF_CHECKED, MF_STRING, MF_UNCHECKED,
     };
 
-    unsafe {
-        InsertMenuW(
+    let text = "AutoConvert\0";
+    let wide: Vec<u16> = text.encode_utf16().collect();
+
+    let check = if autoconvert_enabled {
+        MF_CHECKED
+    } else {
+        MF_UNCHECKED
+    };
+
+    (unsafe {
+        AppendMenuW(
             hmenu,
-            0,
-            MF_STRING | check_flag,
-            ID_AUTOCONVERT_ON as usize,
+            MF_STRING | check,
+            ID_AUTOCONVERT_TOGGLE as usize,
             PCWSTR(wide.as_ptr()),
         )
-    }?;
+    })?;
 
     Ok(())
 }
 
-unsafe fn insert_autoconvert_off_item(hmenu: HMENU, autoconvert_enabled: bool) -> Result<()> {
-    let text = "AutoConvert: OFF\0";
-    let wide = text.encode_utf16().collect::<Vec<u16>>();
+unsafe fn append_show_hide_item(hmenu: HMENU, window_visible: bool) -> Result<()> {
+    use windows::Win32::UI::WindowsAndMessaging::{AppendMenuW, MF_STRING};
 
-    let check_flag = if !autoconvert_enabled {
-        windows::Win32::UI::WindowsAndMessaging::MF_CHECKED
-    } else {
-        windows::Win32::UI::WindowsAndMessaging::MF_UNCHECKED
-    };
+    let text = if window_visible { "Hide\0" } else { "Show\0" };
+    let wide: Vec<u16> = text.encode_utf16().collect();
 
-    unsafe {
-        InsertMenuW(
+    (unsafe {
+        AppendMenuW(
             hmenu,
-            0,
-            MF_STRING | check_flag,
-            ID_AUTOCONVERT_OFF as usize,
+            MF_STRING,
+            ID_SHOW_HIDE as usize,
             PCWSTR(wide.as_ptr()),
         )
-    }?;
+    })?;
+
+    Ok(())
+}
+
+unsafe fn append_exit_item(hmenu: HMENU) -> Result<()> {
+    use windows::Win32::UI::WindowsAndMessaging::{AppendMenuW, MF_STRING};
+
+    let text = "Exit\0";
+    let wide: Vec<u16> = text.encode_utf16().collect();
+
+    (unsafe { AppendMenuW(hmenu, MF_STRING, ID_EXIT as usize, PCWSTR(wide.as_ptr())) })?;
 
     Ok(())
 }
@@ -372,11 +423,11 @@ unsafe fn insert_autoconvert_off_item(hmenu: HMENU, autoconvert_enabled: bool) -
 unsafe fn handle_tray_menu_cmd(
     hwnd: HWND,
     window_visible: bool,
+    _autoconvert_enabled: bool,
     cmd: BOOL,
 ) -> Result<TrayMenuAction> {
     match cmd.0.cast_unsigned() {
-        ID_AUTOCONVERT_ON => Ok(TrayMenuAction::SetAutoConvert(true)),
-        ID_AUTOCONVERT_OFF => Ok(TrayMenuAction::SetAutoConvert(false)),
+        ID_AUTOCONVERT_TOGGLE => Ok(TrayMenuAction::ToggleAutoConvert),
 
         ID_SHOW_HIDE => {
             unsafe { toggle_window_visibility(hwnd, window_visible) };
@@ -384,7 +435,7 @@ unsafe fn handle_tray_menu_cmd(
         }
 
         ID_EXIT => {
-            unsafe { request_window_close(hwnd) }?;
+            (unsafe { request_process_exit(hwnd) })?;
             Ok(TrayMenuAction::None)
         }
 
