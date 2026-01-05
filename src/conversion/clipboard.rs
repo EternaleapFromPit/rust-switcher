@@ -2,16 +2,15 @@ use std::ptr::null_mut;
 
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HGLOBAL},
+        Foundation::{GlobalFree, HANDLE, HGLOBAL},
         System::{
+            Com::IDataObject,
             DataExchange::{
                 CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData,
                 GetClipboardSequenceNumber, OpenClipboard, SetClipboardData,
             },
-            Memory::{
-                GMEM_MOVEABLE, GlobalAlloc, GlobalFree, GlobalLock, GlobalSize, GlobalUnlock,
-            },
-            Ole::{IDataObject, OleGetClipboard, OleInitialize, OleSetClipboard, OleUninitialize},
+            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
+            Ole::{OleGetClipboard, OleInitialize, OleSetClipboard, OleUninitialize},
         },
     },
     core::HRESULT,
@@ -123,19 +122,19 @@ impl Drop for GlobalMem {
     fn drop(&mut self) {
         if self.owned && !self.handle.0.is_null() {
             unsafe {
-                let _ = GlobalFree(self.handle);
+                let _ = GlobalFree(Some(self.handle));
             }
         }
     }
 }
 
-struct OleGuard {
+pub(crate) struct OleGuard {
     active: bool,
 }
 
 impl OleGuard {
     fn init() -> Result<Option<Self>, windows::core::Error> {
-        match unsafe { OleInitialize(null_mut()) } {
+        match unsafe { OleInitialize(Some(null_mut())) } {
             Ok(_) => Ok(Some(Self { active: true })),
             Err(e) if e.code() == HRESULT(0x8001_0106_u32 as i32) => Ok(None),
             Err(e) => Err(e),
@@ -154,7 +153,7 @@ impl Drop for OleGuard {
 }
 
 #[derive(Debug, Clone)]
-struct ClipboardFormatData {
+pub(crate) struct ClipboardFormatData {
     format: u32,
     data: Vec<u8>,
 }
@@ -173,13 +172,13 @@ pub enum ClipboardSnapshot {
 ///
 /// Returns `None` if the clipboard cannot be opened or captured.
 pub fn snapshot() -> Option<ClipboardSnapshot> {
-    if let Ok(ole) = OleGuard::init() {
-        if let Ok(data_object) = unsafe { OleGetClipboard() } {
-            return Some(ClipboardSnapshot::Ole {
-                data_object,
-                _ole: ole,
-            });
-        }
+    if let Ok(ole) = OleGuard::init()
+        && let Ok(data_object) = unsafe { OleGetClipboard() }
+    {
+        return Some(ClipboardSnapshot::Ole {
+            data_object,
+            _ole: ole,
+        });
     }
 
     let _clip = ClipboardGuard::open()?;
@@ -275,72 +274,6 @@ pub fn restore_snapshot(snapshot: &ClipboardSnapshot) -> bool {
                     }
                 }
             })
-        }
-    }
-}
-
-/// Replaces clipboard content with UTF 16 text (`CF_UNICODETEXT`).
-///
-/// Returns `true` on success, `false` on failure.
-///
-/// Operational details:
-/// - Opens clipboard (fails fast if clipboard is locked).
-/// - Empties clipboard.
-/// - Allocates a movable global memory block (`GMEM_MOVEABLE`) and copies NUL terminated UTF 16.
-/// - Transfers ownership of the memory block to the clipboard via `SetClipboardData`.
-///
-/// Safety/FFI notes:
-/// - After successful `SetClipboardData`, the system owns the `HGLOBAL`.
-/// - On failure after allocation, this code currently leaks the allocated `HGLOBAL` because it is
-///   neither freed nor transferred. If you want strict correctness, wrap the allocation into a small
-///   RAII type that calls `GlobalFree` unless `SetClipboardData` succeeds.
-///
-/// Idiomatic improvements recommended:
-/// - Return `windows::core::Result<()>` instead of `bool` to keep error context.
-/// - Add `GlobalFree` on failure paths.
-/// - Use `size_of::<u16>()` rather than hardcoded `2`.
-pub fn set_unicode_text(text: &str) -> bool {
-    let Some(_clip) = ClipboardGuard::open() else {
-        return false;
-    };
-
-    unsafe {
-        let _ = EmptyClipboard();
-
-        let mut units: Vec<u16> = text.encode_utf16().collect();
-        units.push(0);
-
-        let bytes = units.len() * std::mem::size_of::<u16>();
-
-        let hmem = match GlobalAlloc(GMEM_MOVEABLE, bytes) {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!(error = ?e, "GlobalAlloc failed");
-                return false;
-            }
-        };
-
-        let mut mem = GlobalMem::new(hmem);
-
-        let ptr = GlobalLock(hmem).cast::<u16>();
-        if ptr.is_null() {
-            tracing::warn!("GlobalLock returned null");
-            return false;
-        }
-
-        std::ptr::copy_nonoverlapping(units.as_ptr(), ptr, units.len());
-        let _ = GlobalUnlock(hmem);
-
-        let handle = HANDLE(hmem.0);
-        match SetClipboardData(CF_UNICODETEXT_ID, Some(handle)) {
-            Ok(_) => {
-                mem.disarm();
-                true
-            }
-            Err(e) => {
-                tracing::warn!(error = ?e, "SetClipboardData failed");
-                false
-            }
         }
     }
 }

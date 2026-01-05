@@ -51,7 +51,6 @@ use crate::{
             notify::on_wm_app_notify,
         },
         win::{
-            keyboard::debug_timers::handle_timer,
             tray::{WM_APP_TRAY, remove_icon},
             tray_dispatch::handle_tray_timer,
         },
@@ -59,6 +58,10 @@ use crate::{
     ui_call, ui_try,
     utils::helpers,
 };
+
+#[rustfmt::skip]
+#[cfg(debug_assertions)]
+use crate::platform::win::keyboard::debug_timers::handle_timer;
 
 fn set_hwnd_text(hwnd: HWND, s: &str) -> windows::core::Result<()> {
     helpers::set_edit_text(hwnd, s)
@@ -530,6 +533,7 @@ fn on_app_error(hwnd: HWND) -> LRESULT {
 
 fn on_timer(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
     let _ = handle_tray_timer(hwnd, wparam);
+    #[cfg(debug_assertions)]
     let _ = handle_timer(hwnd, wparam.0);
     LRESULT(0)
 }
