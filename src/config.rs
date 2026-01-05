@@ -45,7 +45,6 @@ pub struct HotkeySequence {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    pub start_on_startup: bool,
     pub delay_ms: u32,
 
     pub hotkey_convert_last_word: Option<Hotkey>,
@@ -62,11 +61,9 @@ pub struct Config {
     #[serde(default)]
     pub hotkey_switch_layout_sequence: Option<HotkeySequence>,
 }
-
 impl Default for Config {
     fn default() -> Self {
         Self {
-            start_on_startup: false,
             delay_ms: 100,
 
             hotkey_switch_layout: None,

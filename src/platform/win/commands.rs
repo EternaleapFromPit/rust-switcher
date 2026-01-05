@@ -73,6 +73,18 @@ fn handle_buttons(hwnd: HWND, id: i32) -> LRESULT {
     };
 
     match cid {
+        ControlId::Autostart => with_state_mut_do(hwnd, |state| {
+            super::handle_autostart_toggle(hwnd, state);
+        }),
+
+        ControlId::Apply => with_state_mut_do(hwnd, |state| {
+            super::handle_apply(hwnd, state);
+        }),
+
+        ControlId::Cancel => with_state_mut_do(hwnd, |state| {
+            super::handle_cancel(hwnd, state);
+        }),
+
         ControlId::Exit => with_state_mut_do(hwnd, |state| {
             if let Err(e) = unsafe { DestroyWindow(hwnd) } {
                 crate::platform::ui::error_notifier::push(
@@ -85,9 +97,6 @@ fn handle_buttons(hwnd: HWND, id: i32) -> LRESULT {
                 super::on_app_error(hwnd);
             }
         }),
-
-        ControlId::Apply => with_state_mut_do(hwnd, |state| super::handle_apply(hwnd, state)),
-        ControlId::Cancel => with_state_mut_do(hwnd, |state| super::handle_cancel(hwnd, state)),
 
         _ => {}
     }

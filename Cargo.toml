@@ -29,6 +29,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_Accessibility",
     "Win32_System_SystemInformation",
     "Win32_System_Ole",
+    "Win32_Storage_FileSystem",
 ] }
 serde = { version = "1.0", features = ["derive"] }
 confy = "2.0"

@@ -67,8 +67,13 @@ fn set_hwnd_text(hwnd: HWND, s: &str) -> windows::core::Result<()> {
     helpers::set_edit_text(hwnd, s)
 }
 
+pub fn refresh_autostart_checkbox(state: &mut AppState) -> windows::core::Result<()> {
+    let enabled = crate::platform::win::autostart::is_enabled()?;
+    crate::utils::helpers::set_checkbox(state.checkboxes.autostart, enabled);
+    Ok(())
+}
+
 fn apply_config_to_ui(state: &mut AppState, cfg: &config::Config) -> windows::core::Result<()> {
-    helpers::set_checkbox(state.checkboxes.autostart, cfg.start_on_startup);
     helpers::set_edit_u32(state.edits.delay_ms, cfg.delay_ms)?;
 
     state.hotkey_values = crate::app::HotkeyValues::from_config(cfg);
@@ -106,7 +111,6 @@ fn apply_config_to_ui(state: &mut AppState, cfg: &config::Config) -> windows::co
 }
 
 fn read_ui_to_config(state: &AppState, mut cfg: config::Config) -> config::Config {
-    cfg.start_on_startup = helpers::get_checkbox(state.checkboxes.autostart);
     cfg.delay_ms = helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(cfg.delay_ms);
 
     cfg.hotkey_convert_last_word_sequence = state.hotkey_sequence_values.last_word;
@@ -147,8 +151,6 @@ fn apply_config_runtime(
     cfg: &config::Config,
 ) -> windows::core::Result<()> {
     state.autoconvert_enabled = false;
-
-    crate::platform::win::autostart::apply_startup_shortcut(cfg.start_on_startup)?;
 
     state.active_hotkey_sequences = crate::app::HotkeySequenceValues::from_config(cfg);
 
@@ -195,6 +197,22 @@ macro_rules! startup_or_return0 {
     }};
 }
 
+pub fn handle_autostart_toggle(hwnd: HWND, state: &mut AppState) {
+    let desired = crate::utils::helpers::get_checkbox(state.checkboxes.autostart);
+
+    if let Err(e) = crate::platform::win::autostart::apply_startup_shortcut(desired) {
+        crate::platform::ui::error_notifier::push(
+            hwnd,
+            state,
+            T_UI,
+            "Failed to update autostart setting",
+            &e,
+        );
+
+        let _ = refresh_autostart_checkbox(state);
+    }
+}
+
 /// Loads config and validates it for runtime use.
 ///
 /// On invalid config, this function notifies the user and falls back to defaults.
@@ -235,11 +253,11 @@ fn on_create(hwnd: HWND) -> LRESULT {
     state.hotkey_values = crate::app::HotkeyValues::from_config(&cfg);
     state.active_hotkey_sequences = crate::app::HotkeySequenceValues::from_config(&cfg);
 
-    #[rustfmt::skip]
-    startup_or_return0!(hwnd, &mut state, "Failed to apply config to UI", apply_config_to_ui(state.as_mut(), &cfg));
-
-    #[rustfmt::skip]
-    startup_or_return0!(hwnd, &mut state, "Failed to apply config at runtime", apply_config_runtime(hwnd, state.as_mut(), &cfg));
+    #[rustfmt::skip] {
+        startup_or_return0!(hwnd, &mut state, "Failed to apply config to UI", apply_config_to_ui(state.as_mut(), &cfg));
+        startup_or_return0!(hwnd, &mut state, "Failed to read autostart state", refresh_autostart_checkbox(state.as_mut()));
+        startup_or_return0!(hwnd, &mut state, "Failed to apply config at runtime", apply_config_runtime(hwnd, state.as_mut(), &cfg));
+    }
 
     keyboard::install(hwnd, state.as_mut());
     mouse::install();
