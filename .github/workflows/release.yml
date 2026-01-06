@@ -23,7 +23,10 @@ concurrency:
 jobs:
   release:
     name: Bump, test, tag, publish
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     env:
       CARGO_EDIT_VERSION: "0.13.0"
     outputs:
@@ -49,8 +52,8 @@ jobs:
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: release-${{ runner.os }}-x86_64-unknown-linux-gnu
-          shared-key: release-${{ runner.os }}-x86_64-unknown-linux-gnu-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/rust-toolchain.toml') }}
+          key: release-${{ runner.os }}-x86_64-pc-windows-msvc
+          shared-key: release-${{ runner.os }}-x86_64-pc-windows-msvc-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/rust-toolchain.toml') }}
 
       - name: Cache cargo binaries
         id: cargo-bin-cache
@@ -140,8 +143,7 @@ jobs:
           fi
 
       - name: Commit release
-        run: |
-          git commit -m "release: ${{ steps.tag.outputs.tag }}"
+        run: git commit -m "release: ${{ steps.tag.outputs.tag }}"
 
       - name: Create tag
         run: git tag "${{ steps.tag.outputs.tag }}"
