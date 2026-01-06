@@ -1,10 +1,11 @@
 name: Release
+run-name: Release on ${{ github.ref_name }} bump ${{ inputs.bump }} | bump_tag=${{ inputs.do_bump_and_tag }} crates=${{ inputs.do_publish_crates }} github=${{ inputs.do_github_release }}
 
 on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version bump type
+        description: Version bump type (used only when do_bump_and_tag=true)
         type: choice
         required: true
         default: patch
@@ -13,6 +14,30 @@ on:
           - minor
           - major
 
+      do_bump_and_tag:
+        description: Bump version, commit, create tag, push to main
+        type: boolean
+        required: true
+        default: true
+
+      do_publish_crates:
+        description: Publish to crates.io (uses tag ref)
+        type: boolean
+        required: true
+        default: true
+
+      do_github_release:
+        description: Build Windows zip and publish GitHub Release (uses tag ref)
+        type: boolean
+        required: true
+        default: true
+
+      existing_tag:
+        description: Existing tag to use when do_bump_and_tag=false (example v1.2.3)
+        type: string
+        required: false
+        default: ""
+
 permissions:
   contents: write
 
@@ -20,202 +45,264 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
-  release:
-    name: Bump, test, tag, publish
-    runs-on: ubuntu-latest
-    env:
-      RUST_TOOLCHAIN: stable
-      CARGO_EDIT_VERSION: "0.13.0"
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.tag.outputs.tag }}
+  requirements:
+    name: Requirements check (Windows, nightly from rust-toolchain.toml)
+    runs-on: windows-latest
 
     steps:
       - name: Verify main branch
         if: ${{ github.ref != 'refs/heads/main' }}
+        shell: pwsh
         run: |
-          echo "Release workflow must be run on main branch. Current ref: $GITHUB_REF"
+          Write-Error "Release workflow must be run on main branch. Current ref: $env:GITHUB_REF"
           exit 1
 
-      - name: Checkout repository
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain (rust-toolchain.toml)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Verify nightly toolchain
+        shell: pwsh
+        run: |
+          $v = rustc -Vv
+          $v | Write-Host
+          if ($v -notmatch "nightly") {
+            Write-Error "Expected nightly toolchain from rust-toolchain.toml, but rustc -Vv does not contain 'nightly'."
+            exit 1
+          }
+
+      - name: Smoke build (release)
+        shell: pwsh
+        run: cargo build -p rust-switcher --release
+
+  bump_and_tag:
+    name: Step 1 - bump version and create tag on main (Windows)
+    runs-on: windows-latest
+    needs: requirements
+    if: ${{ inputs.do_bump_and_tag }}
+
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - name: Checkout (full history and tags)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain (rust-toolchain.toml)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: release-${{ runner.os }}-x86_64-unknown-linux-gnu
-          shared-key: release-${{ runner.os }}-x86_64-unknown-linux-gnu-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/rust-toolchain.toml') }}
-
-      - name: Cache cargo binaries
-        id: cargo-bin-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ env.CARGO_EDIT_VERSION }}
+      - name: Verify nightly toolchain
+        shell: pwsh
+        run: |
+          $v = rustc -Vv
+          if ($v -notmatch "nightly") {
+            Write-Error "Expected nightly toolchain from rust-toolchain.toml, but rustc -Vv does not contain 'nightly'."
+            exit 1
+          }
 
       - name: Install cargo-edit
-        if: steps.cargo-bin-cache.outputs.cache-hit != 'true'
-        run: cargo install cargo-edit --locked --version $CARGO_EDIT_VERSION
+        shell: pwsh
+        run: cargo install cargo-edit --locked --version 0.13.0
 
-      - name: Format check
-        run: cargo fmt --check
+      - name: Bump version in Cargo.toml
+        shell: pwsh
+        run: cargo set-version --bump "${{ inputs.bump }}"
 
-      - name: Compute test args
-        id: test-args
-        run: |
-          python - <<'PY' > /tmp/test_args
-          import json
-          import subprocess
+      - name: Update Cargo.lock
+        shell: pwsh
+        run: cargo build -p rust-switcher --release
 
-          metadata = json.loads(
-              subprocess.check_output(
-                  ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-                  text=True,
-              )
-          )
-          args = "--workspace" if len(metadata.get("workspace_members", [])) > 1 else ""
-          print(args)
-          PY
-          echo "args=$(cat /tmp/test_args)" >> "$GITHUB_OUTPUT"
-
-      - name: Run tests
-        run: cargo test --all-features ${{ steps.test-args.outputs.args }}
-
-      - name: Bump version
-        run: cargo set-version --bump ${{ inputs.bump }}
-
-      - name: Read crate version
+      - name: Read version and tag
         id: version
+        shell: pwsh
         run: |
-          python - <<'PY' > /tmp/version
-          import json
-          import subprocess
-          from pathlib import Path
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $memberId = $meta.workspace_members[0]
+          $pkg = $meta.packages | Where-Object { $_.id -eq $memberId } | Select-Object -First 1
+          if (-not $pkg) { throw "Unable to determine workspace root package from cargo metadata" }
 
-          metadata = json.loads(
-              subprocess.check_output(
-                  ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-                  text=True,
-              )
-          )
-          workspace_root = Path(metadata["workspace_root"]).resolve()
-          manifest_path = workspace_root / "Cargo.toml"
-          package = next(
-              pkg for pkg in metadata["packages"] if Path(pkg["manifest_path"]).resolve() == manifest_path
-          )
-          version = package["version"]
-          print(version)
-          PY
-          version=$(cat /tmp/version)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          $version = $pkg.version
+          $tag = "v$version"
 
-      - name: Set release tag
-        id: tag
-        run: echo "tag=v${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Tag: $tag"
 
-      - name: Check tag does not exist
+      - name: Ensure tag does not exist on origin
+        shell: pwsh
         run: |
-          if git show-ref --tags --verify --quiet "refs/tags/${{ steps.tag.outputs.tag }}"; then
-            echo "Tag ${{ steps.tag.outputs.tag }} already exists."
-            exit 1
-          fi
+          $tag = "${{ steps.version.outputs.tag }}"
+          git fetch --tags --force
+          git show-ref --tags --verify --quiet "refs/tags/$tag"
+          if ($LASTEXITCODE -eq 0) {
+            throw "Tag $tag already exists. You cannot reuse an existing tag for a new release. Bump again or use existing_tag with do_bump_and_tag=false."
+          }
 
       - name: Configure git identity
+        shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Stage release files
+      - name: Commit release changes
+        shell: pwsh
         run: |
           git add Cargo.toml Cargo.lock
-          if git diff --cached --quiet; then
-            echo "No changes to commit after version bump."
-            exit 1
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { throw "No changes to commit after version bump" }
+          git commit -m "release: ${{ steps.version.outputs.tag }}"
+
+      - name: Create tag locally
+        shell: pwsh
+        run: git tag "${{ steps.version.outputs.tag }}"
+
+      - name: Push commit and tag to origin
+        shell: pwsh
+        run: git push --atomic origin HEAD:main "${{ steps.version.outputs.tag }}"
+
+  publish_crates:
+    name: Step 2 - publish to crates.io (tag ref)
+    runs-on: ubuntu-latest
+    needs: [requirements, bump_and_tag]
+    if: ${{ inputs.do_publish_crates && (inputs.do_bump_and_tag || inputs.existing_tag != '') }}
+
+    steps:
+      - name: Resolve tag
+        id: resolve
+        shell: bash
+        run: |
+          if [ "${{ inputs.do_bump_and_tag }}" = "true" ]; then
+            echo "tag=${{ needs.bump_and_tag.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            if [ -z "${{ inputs.existing_tag }}" ]; then
+              echo "existing_tag is required when do_bump_and_tag=false" >&2
+              exit 1
+            fi
+            echo "tag=${{ inputs.existing_tag }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Commit release
+      - name: Checkout at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Rust toolchain (rust-toolchain.toml)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Verify nightly toolchain
+        shell: bash
         run: |
-          git commit -m "release: ${{ steps.tag.outputs.tag }}"
-
-      - name: Create tag
-        run: git tag "${{ steps.tag.outputs.tag }}"
-
-      - name: Push commit
-        run: git push origin HEAD:main
-
-      - name: Push tag
-        run: git push origin "${{ steps.tag.outputs.tag }}"
+          rustc -Vv
+          rustc -Vv | grep -q nightly
 
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked
 
-  build-windows:
-    name: Build Windows asset
+  build_windows_asset:
+    name: Step 3 - build Windows zip (tag ref)
     runs-on: windows-latest
-    needs: release
+    needs: [requirements, bump_and_tag]
+    if: ${{ inputs.do_github_release && (inputs.do_bump_and_tag || inputs.existing_tag != '') }}
 
     steps:
-      - name: Checkout repository
+      - name: Resolve tag
+        id: resolve
+        shell: pwsh
+        run: |
+          if ("${{ inputs.do_bump_and_tag }}" -eq "true") {
+            "tag=${{ needs.bump_and_tag.outputs.tag }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } else {
+            if ("${{ inputs.existing_tag }}" -eq "") { throw "existing_tag is required when do_bump_and_tag=false" }
+            "tag=${{ inputs.existing_tag }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          }
+
+      - name: Checkout at tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release.outputs.tag }}
+          ref: ${{ steps.resolve.outputs.tag }}
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain (rust-toolchain.toml)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: Restore Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: build-windows-${{ runner.os }}-x86_64-pc-windows-msvc
-          shared-key: build-windows-${{ runner.os }}-x86_64-pc-windows-msvc-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('**/rust-toolchain.toml') }}
+      - name: Verify nightly toolchain
+        shell: pwsh
+        run: |
+          $v = rustc -Vv
+          if ($v -notmatch "nightly") {
+            Write-Error "Expected nightly toolchain from rust-toolchain.toml, but rustc -Vv does not contain 'nightly'."
+            exit 1
+          }
 
-      - name: Build Windows binary
-        run: cargo build --release --locked
+      - name: Build
+        shell: pwsh
+        run: cargo build -p rust-switcher --release --locked
 
-      - name: Package Windows asset
+      - name: Package zip
         id: package
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          $version = "${{ needs.release.outputs.version }}"
-          $asset = "rust-switcher-$version-windows-x86_64.zip"
-          Compress-Archive -Path "target/release/rust-switcher.exe" -DestinationPath $asset -Force
-          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $memberId = $meta.workspace_members[0]
+          $pkg = $meta.packages | Where-Object { $_.id -eq $memberId } | Select-Object -First 1
+          if (-not $pkg) { throw "Unable to determine workspace root package from cargo metadata" }
 
-      - name: Upload Windows asset
+          $version = $pkg.version
+          $asset = "rust-switcher-$version-windows-x86_64.zip"
+
+          Compress-Archive -Path "target/release/rust-switcher.exe" -DestinationPath $asset -Force
+          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-asset
           path: ${{ steps.package.outputs.asset }}
           if-no-files-found: error
 
-  github-release:
-    name: Publish GitHub Release
+  github_release:
+    name: Step 4 - publish GitHub Release (tag ref)
     runs-on: ubuntu-latest
-    needs:
-      - release
-      - build-windows
+    needs: [requirements, bump_and_tag, build_windows_asset]
+    if: ${{ inputs.do_github_release && (inputs.do_bump_and_tag || inputs.existing_tag != '') }}
 
     steps:
+      - name: Resolve tag
+        id: resolve
+        shell: bash
+        run: |
+          if [ "${{ inputs.do_bump_and_tag }}" = "true" ]; then
+            echo "tag=${{ needs.bump_and_tag.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            if [ -z "${{ inputs.existing_tag }}" ]; then
+              echo "existing_tag is required when do_bump_and_tag=false" >&2
+              exit 1
+            fi
+            echo "tag=${{ inputs.existing_tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download Windows asset
         uses: actions/download-artifact@v4
         with:
           name: windows-asset
 
-      - name: Publish GitHub release
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.release.outputs.tag }}
-          name: ${{ needs.release.outputs.tag }}
-          files: rust-switcher-${{ needs.release.outputs.version }}-windows-x86_64.zip
+          tag_name: ${{ steps.resolve.outputs.tag }}
+          name: ${{ steps.resolve.outputs.tag }}
+          files: "*.zip"
