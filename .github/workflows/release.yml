@@ -1,5 +1,4 @@
 name: Release
-run-name: Release on ${{ github.ref_name }} bump ${{ inputs.bump }}
 
 on:
   workflow_dispatch:
@@ -27,18 +26,17 @@ env:
 
 jobs:
   release:
-    name: Bump, commit, tag, publish, build asset
-    runs-on: windows-latest
+    name: Bump, commit, publish, tag
+    runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.vars.outputs.version }}
+      tag: ${{ steps.vars.outputs.tag }}
 
     steps:
       - name: Verify main branch
         if: ${{ github.ref != 'refs/heads/main' }}
-        shell: pwsh
         run: |
-          Write-Error "Release workflow must be run on main branch. Current ref: $env:GITHUB_REF"
+          echo "Release workflow must be run on main branch. Current ref: $GITHUB_REF"
           exit 1
 
       - name: Checkout repository
@@ -49,104 +47,114 @@ jobs:
 
       - name: Setup Rust toolchain from rust-toolchain.toml
         uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          cache: true
-          cache-on-failure: true
 
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-edit
-        shell: pwsh
         run: cargo install cargo-edit --locked --version 0.13.0
 
       - name: Bump version
-        shell: pwsh
         run: cargo set-version --bump "${{ inputs.bump }}"
 
-      - name: Update Cargo.lock without upgrading dependencies
-        shell: pwsh
-        run: cargo build -p rust-switcher --release
+      - name: Refresh Cargo.lock without upgrading deps
+        run: cargo update --workspace --locked
 
-      - name: Read crate version and tag
-        id: version
-        shell: pwsh
+      - name: Read version and tag
+        id: vars
         run: |
-          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-          if (-not $meta.workspace_members -or $meta.workspace_members.Count -lt 1) {
-            throw "cargo metadata returned empty workspace_members"
-          }
-          $memberId = $meta.workspace_members[0]
-          $pkg = $meta.packages | Where-Object { $_.id -eq $memberId } | Select-Object -First 1
-          if (-not $pkg) {
-            throw "Unable to determine workspace root package from cargo metadata"
-          }
-
-          $version = $pkg.version
-          $tag = "v$version"
-
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-          Write-Host "Version: $version"
-          Write-Host "Tag: $tag"
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="rust-switcher") | .version' | head -n1)"
+          if [ -z "$version" ] || [ "$version" = "null" ]; then
+            echo "Failed to read crate version from cargo metadata"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
 
       - name: Ensure tag does not exist
-        shell: pwsh
         run: |
-          $tag = "${{ steps.version.outputs.tag }}"
+          set -euo pipefail
           git fetch --tags --force
-          git show-ref --tags --verify --quiet "refs/tags/$tag"
-          if ($LASTEXITCODE -eq 0) { throw "Tag $tag already exists" }
+          if git show-ref --tags --verify --quiet "refs/tags/${{ steps.vars.outputs.tag }}"; then
+            echo "Tag ${{ steps.vars.outputs.tag }} already exists."
+            exit 1
+          fi
 
       - name: Configure git identity
-        shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Commit release
-        shell: pwsh
         run: |
+          set -euo pipefail
           git add Cargo.toml Cargo.lock
-          git diff --cached --quiet
-          if ($LASTEXITCODE -eq 0) { throw "No changes to commit after version bump" }
-          git commit -m "release: ${{ steps.version.outputs.tag }}"
+          if git diff --cached --quiet; then
+            echo "No changes to commit after version bump."
+            exit 1
+          fi
+          git commit -m "release: ${{ steps.vars.outputs.tag }}"
 
-      - name: Create tag
-        shell: pwsh
-        run: git tag "${{ steps.version.outputs.tag }}"
-
-      - name: Push commit and tag
-        shell: pwsh
-        run: git push --atomic origin HEAD:main "${{ steps.version.outputs.tag }}"
+      - name: Push commit
+        run: git push origin HEAD:main
 
       - name: Publish to crates.io
-        shell: pwsh
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked
 
+      - name: Create and push tag
+        run: |
+          set -euo pipefail
+          git tag "${{ steps.vars.outputs.tag }}"
+          git push origin "${{ steps.vars.outputs.tag }}"
+
+  build-windows:
+    name: Build Windows asset
+    runs-on: windows-latest
+    needs: release
+
+    steps:
+      - name: Checkout repository at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Rust toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Windows binary
+        run: cargo build --release --locked
+
       - name: Package Windows asset
+        id: package
         shell: pwsh
         run: |
-          $version = "${{ steps.version.outputs.version }}"
+          $ErrorActionPreference = "Stop"
+          $version = "${{ needs.release.outputs.version }}"
           $asset = "rust-switcher-$version-windows-x86_64.zip"
           Compress-Archive -Path "target/release/rust-switcher.exe" -DestinationPath $asset -Force
-          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "Asset: $asset"
+          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Upload Windows asset
         uses: actions/upload-artifact@v4
         with:
           name: windows-asset
-          path: "*.zip"
+          path: ${{ steps.package.outputs.asset }}
           if-no-files-found: error
 
   github-release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: release
+    needs:
+      - release
+      - build-windows
 
     steps:
       - name: Download Windows asset
@@ -159,4 +167,4 @@ jobs:
         with:
           tag_name: ${{ needs.release.outputs.tag }}
           name: ${{ needs.release.outputs.tag }}
-          files: "*.zip"
+          files: rust-switcher-${{ needs.release.outputs.version }}-windows-x86_64.zip
