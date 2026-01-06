@@ -1,4 +1,5 @@
 name: Release
+run-name: Release on ${{ github.ref_name }} bump ${{ inputs.bump }}
 
 on:
   workflow_dispatch:
@@ -26,18 +27,19 @@ env:
 
 jobs:
   release:
-    name: Bump, commit, tag, publish, GitHub Release
+    name: Bump, commit, tag, publish, build asset
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
       - name: Verify main branch
-        shell: bash
+        if: ${{ github.ref != 'refs/heads/main' }}
+        shell: pwsh
         run: |
-          set -euo pipefail
-          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
-            echo "Release workflow must be run on main branch. Current ref: ${GITHUB_REF}"
-            exit 1
-          fi
+          Write-Error "Release workflow must be run on main branch. Current ref: $env:GITHUB_REF"
+          exit 1
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -47,127 +49,114 @@ jobs:
 
       - name: Setup Rust toolchain from rust-toolchain.toml
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
 
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-edit
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo install cargo-edit --locked --version 0.13.0
+        shell: pwsh
+        run: cargo install cargo-edit --locked --version 0.13.0
 
-      - name: Bump version until tag is free
+      - name: Bump version
+        shell: pwsh
+        run: cargo set-version --bump "${{ inputs.bump }}"
+
+      - name: Update Cargo.lock without upgrading dependencies
+        shell: pwsh
+        run: cargo build -p rust-switcher --release
+
+      - name: Read crate version and tag
         id: version
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-
-          bump="${{ inputs.bump }}"
-
-          read_version() {
-            python - <<'PY'
-import json
-import subprocess
-from pathlib import Path
-
-metadata = json.loads(
-    subprocess.check_output(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
-        text=True,
-    )
-)
-
-root = Path(metadata["workspace_root"]).resolve()
-manifest = (root / "Cargo.toml").resolve()
-
-pkg = next(
-    p for p in metadata["packages"]
-    if Path(p["manifest_path"]).resolve() == manifest
-)
-
-print(pkg["version"])
-PY
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          if (-not $meta.workspace_members -or $meta.workspace_members.Count -lt 1) {
+            throw "cargo metadata returned empty workspace_members"
+          }
+          $memberId = $meta.workspace_members[0]
+          $pkg = $meta.packages | Where-Object { $_.id -eq $memberId } | Select-Object -First 1
+          if (-not $pkg) {
+            throw "Unable to determine workspace root package from cargo metadata"
           }
 
-          for i in $(seq 1 50); do
-            cargo set-version --bump "${bump}"
-            cargo generate-lockfile
+          $version = $pkg.version
+          $tag = "v$version"
 
-            version="$(read_version)"
-            tag="v${version}"
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-            if git show-ref --tags --verify --quiet "refs/tags/${tag}"; then
-              echo "Tag ${tag} already exists, bumping again."
-              bump="patch"
-              continue
-            fi
+          Write-Host "Version: $version"
+          Write-Host "Tag: $tag"
 
-            echo "version=${version}" >> "${GITHUB_OUTPUT}"
-            echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-            exit 0
-          done
-
-          echo "Could not find a free tag after multiple bumps."
-          exit 1
+      - name: Ensure tag does not exist
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.version.outputs.tag }}"
+          git fetch --tags --force
+          git show-ref --tags --verify --quiet "refs/tags/$tag"
+          if ($LASTEXITCODE -eq 0) { throw "Tag $tag already exists" }
 
       - name: Configure git identity
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Commit release
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
           git add Cargo.toml Cargo.lock
-          if git diff --cached --quiet; then
-            echo "No changes to commit after version bump."
-            exit 1
-          fi
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { throw "No changes to commit after version bump" }
           git commit -m "release: ${{ steps.version.outputs.tag }}"
 
       - name: Create tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          git tag "${{ steps.version.outputs.tag }}"
+        shell: pwsh
+        run: git tag "${{ steps.version.outputs.tag }}"
 
       - name: Push commit and tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          git push --atomic origin HEAD:main "${{ steps.version.outputs.tag }}"
+        shell: pwsh
+        run: git push --atomic origin HEAD:main "${{ steps.version.outputs.tag }}"
 
       - name: Publish to crates.io
+        shell: pwsh
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo publish --locked
-
-      - name: Build Windows binary
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo build --release --locked
+        run: cargo publish --locked
 
       - name: Package Windows asset
-        id: package
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
           $version = "${{ steps.version.outputs.version }}"
           $asset = "rust-switcher-$version-windows-x86_64.zip"
           Compress-Archive -Path "target/release/rust-switcher.exe" -DestinationPath $asset -Force
-          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Asset: $asset"
 
-      - name: Publish GitHub Release
+      - name: Upload Windows asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-asset
+          path: "*.zip"
+          if-no-files-found: error
+
+  github-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: release
+
+    steps:
+      - name: Download Windows asset
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-asset
+
+      - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }}
-          files: ${{ steps.package.outputs.asset }}
+          tag_name: ${{ needs.release.outputs.tag }}
+          name: ${{ needs.release.outputs.tag }}
+          files: "*.zip"
