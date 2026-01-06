@@ -4,8 +4,8 @@ pub(crate) mod debug_timers;
 mod keydown;
 mod keyup;
 pub(crate) mod mods;
-mod sequence;
-mod vk;
+pub(crate) mod sequence;
+pub(crate) mod vk;
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 
