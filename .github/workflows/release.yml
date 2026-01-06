@@ -25,7 +25,6 @@ jobs:
     name: Bump, test, tag, publish
     runs-on: ubuntu-latest
     env:
-      RUST_TOOLCHAIN: stable
       CARGO_EDIT_VERSION: "0.13.0"
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -44,8 +43,8 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
@@ -58,7 +57,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cargo/bin
-          key: cargo-bin-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ env.CARGO_EDIT_VERSION }}
+          key: cargo-bin-${{ runner.os }}-${{ env.CARGO_EDIT_VERSION }}
 
       - name: Install cargo-edit
         if: steps.cargo-bin-cache.outputs.cache-hit != 'true'
@@ -171,8 +170,8 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Restore Rust cache
         uses: Swatinem/rust-cache@v2
