@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 pub mod config_io_tests;
+pub mod config_path_tests;
 pub mod config_validator_tests;
 pub mod hotkey_format_tests;
 pub mod keyboard_sequence_tests;
