@@ -1,5 +1,12 @@
+# Release workflow requirements
+# - Primary target platform: Windows (windows-latest)
+# - Rust toolchain: nightly (must be declared in rust-toolchain.toml)
+# - Version source of truth: Cargo.toml (bumped by cargo-edit), tag format: v<version>
+# - Artifact: rust-switcher-<version>-windows-x86_64.zip containing target/release/rust-switcher.exe
+# - Goal: publish crate to crates.io and publish GitHub Release with Windows asset
+
 name: Release
-run-name: Release ${{ github.event_name }} ${{ github.ref_name }}
+run-name: Release ${{ github.event_name }} ${{ github.ref_name }} plan=${{ inputs.plan || 'tag-push' }}
 
 on:
   workflow_dispatch:
@@ -25,7 +32,7 @@ on:
           - minor
           - major
       tag:
-        description: Tag override (only for plan=publish_crates or plan=github_release). Example v0.1.13
+        description: Tag for plan=publish_crates or plan=github_release (example v0.1.13)
         type: string
         required: false
         default: ""
@@ -42,223 +49,318 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  requirements:
+    name: Requirements check (Windows + nightly)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      toolchain_channel: ${{ steps.toolchain.outputs.channel }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify main branch for workflow_dispatch
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' }}
+        shell: pwsh
+        run: |
+          Write-Error "Must run workflow_dispatch on main. Current ref: $env:GITHUB_REF"
+          exit 1
+
+      - name: Read rust-toolchain.toml and enforce nightly
+        id: toolchain
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "rust-toolchain.toml")) {
+            throw "rust-toolchain.toml not found in repository root"
+          }
+
+          $content = Get-Content -Raw -Encoding UTF8 "rust-toolchain.toml"
+
+          $m = [regex]::Match($content, '^\s*channel\s*=\s*"(.*?)"\s*$', 'Multiline')
+          if (-not $m.Success) {
+            throw "Unable to find toolchain channel in rust-toolchain.toml (expected: channel = ""nightly"")"
+          }
+
+          $channel = $m.Groups[1].Value.Trim()
+          "channel=$channel" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Toolchain channel from rust-toolchain.toml: $channel"
+
+          if ($channel -ne "nightly") {
+            throw "Toolchain must be nightly. Current channel: $channel"
+          }
+
+      - name: Setup Rust from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
+
+      - name: Sanity check rustc and cargo
+        shell: pwsh
+        run: |
+          rustc -V
+          cargo -V
+
   bump:
-    name: Step 1 - bump version on main
+    name: Step 1 - bump version on main (Windows)
     if: ${{ github.event_name == 'workflow_dispatch' && (inputs.plan == 'full' || inputs.plan == 'bump') }}
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       contents: write
+    needs: [requirements]
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
 
     steps:
-      - name: Verify main branch
-        if: ${{ github.ref != 'refs/heads/main' }}
-        run: |
-          echo "Must run on main. Current ref: $GITHUB_REF"
-          exit 1
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Rust
+      - name: Setup Rust from rust-toolchain.toml
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
 
       - name: Cache
         uses: Swatinem/rust-cache@v2
 
       - name: Install cargo-edit
+        shell: pwsh
         run: cargo install cargo-edit --locked --version 0.13.0
 
       - name: Bump version
+        shell: pwsh
         run: cargo set-version --bump "${{ inputs.bump }}"
 
-      - name: Update Cargo.lock
-        run: cargo build --release
+      - name: Update Cargo.lock without upgrading dependencies
+        shell: pwsh
+        run: cargo build -p rust-switcher --release
 
-      - name: Read version
+      - name: Read crate version and tag
         id: v
+        shell: pwsh
         run: |
-          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="rust-switcher") | .version' | head -n1)"
-          if [ -z "$version" ] || [ "$version" = "null" ]; then
-            echo "Unable to read version for package rust-switcher"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          echo "Version: $version"
-          echo "Tag: v$version"
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $pkg = $meta.packages | Where-Object { $_.name -eq "rust-switcher" } | Select-Object -First 1
+          if (-not $pkg) { throw "Package rust-switcher not found in cargo metadata" }
+
+          $version = $pkg.version
+          $tag = "v$version"
+
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          Write-Host "Version: $version"
+          Write-Host "Tag: $tag"
 
       - name: Configure git identity
+        shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Commit bump
+        shell: pwsh
         run: |
           git add Cargo.toml Cargo.lock
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-            exit 1
-          fi
+          git diff --cached --quiet
+          if ($LASTEXITCODE -eq 0) { throw "No changes to commit after version bump" }
           git commit -m "chore: bump to ${{ steps.v.outputs.tag }}"
 
       - name: Push to main
+        shell: pwsh
         run: git push origin HEAD:main
 
   tag:
-    name: Step 2 - create tag on main
+    name: Step 2 - create tag on main (Windows)
     if: ${{ github.event_name == 'workflow_dispatch' && (inputs.plan == 'full' || inputs.plan == 'tag') }}
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       contents: write
-    needs: [bump]
+    needs: [requirements, bump]
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
 
     steps:
-      - name: Verify main branch
-        if: ${{ github.ref != 'refs/heads/main' }}
-        run: |
-          echo "Must run on main. Current ref: $GITHUB_REF"
-          exit 1
-
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Setup Rust
+      - name: Setup Rust from rust-toolchain.toml
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
 
-      - name: Read version and tag
+      - name: Read crate version and tag
         id: v
+        shell: pwsh
         run: |
-          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="rust-switcher") | .version' | head -n1)"
-          if [ -z "$version" ] || [ "$version" = "null" ]; then
-            echo "Unable to read version for package rust-switcher"
-            exit 1
-          fi
-          tag="v$version"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Tag: $tag"
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $pkg = $meta.packages | Where-Object { $_.name -eq "rust-switcher" } | Select-Object -First 1
+          if (-not $pkg) { throw "Package rust-switcher not found in cargo metadata" }
+
+          $version = $pkg.version
+          $tag = "v$version"
+
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          Write-Host "Version: $version"
+          Write-Host "Tag: $tag"
 
       - name: Ensure tag does not exist
+        shell: pwsh
         run: |
-          tag="${{ steps.v.outputs.tag }}"
+          $tag = "${{ steps.v.outputs.tag }}"
           git fetch --tags --force
-          if git show-ref --tags --verify --quiet "refs/tags/$tag"; then
-            echo "Tag already exists: $tag"
-            exit 1
-          fi
+          git show-ref --tags --verify --quiet "refs/tags/$tag"
+          if ($LASTEXITCODE -eq 0) { throw "Tag already exists: $tag" }
 
       - name: Configure git identity
+        shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Create and push tag
+        shell: pwsh
         run: |
-          tag="${{ steps.v.outputs.tag }}"
+          $tag = "${{ steps.v.outputs.tag }}"
           git tag "$tag"
           git push origin "refs/tags/$tag"
 
-  publish_crates:
-    name: Step 3 - publish to crates.io
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.plan == 'full' || inputs.plan == 'publish_crates')) }}
-    runs-on: ubuntu-latest
+  publish_crates_after_tag:
+    name: Step 3 - publish to crates.io (after tag, Windows)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.plan == 'full' }}
+    runs-on: windows-latest
     permissions:
       contents: read
-    needs: [tag]
+    needs: [requirements, tag]
+
     steps:
-      - name: Resolve tag
-        id: ref
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ -n "${{ inputs.tag }}" ]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ -n "${{ needs.tag.outputs.tag }}" ]; then
-            echo "tag=${{ needs.tag.outputs.tag }}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "No tag resolved. Provide inputs.tag or run plan=full/tag first."
-          exit 1
-
       - name: Checkout at tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.ref.outputs.tag }}
+          ref: ${{ needs.tag.outputs.tag }}
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Setup Rust
+      - name: Setup Rust from rust-toolchain.toml
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
 
       - name: Cache
         uses: Swatinem/rust-cache@v2
 
       - name: Publish
+        shell: pwsh
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked
 
-  build_windows:
-    name: Step 4 - build Windows asset
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.plan == 'full' || inputs.plan == 'github_release')) }}
+  publish_crates_by_tag:
+    name: Step 3 - publish to crates.io (manual tag, Windows)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.plan == 'publish_crates' }}
     runs-on: windows-latest
     permissions:
       contents: read
-    needs: [tag]
-    outputs:
-      tag: ${{ steps.ref.outputs.tag }}
-      version: ${{ steps.v.outputs.version }}
-      asset: ${{ steps.pack.outputs.asset }}
+    needs: [requirements]
 
     steps:
-      - name: Resolve tag
-        id: ref
+      - name: Require inputs.tag
         shell: pwsh
         run: |
-          if ("${{ github.event_name }}" -eq "push") {
-            "tag=${{ github.ref_name }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            exit 0
-          }
-
-          if ("${{ inputs.tag }}" -ne "") {
-            "tag=${{ inputs.tag }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            exit 0
-          }
-
-          if ("${{ needs.tag.outputs.tag }}" -ne "") {
-            "tag=${{ needs.tag.outputs.tag }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            exit 0
-          }
-
-          throw "No tag resolved. Provide inputs.tag or run plan=full/tag first."
+          if ("${{ inputs.tag }}" -eq "") { throw "inputs.tag is required for plan=publish_crates" }
 
       - name: Checkout at tag
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.ref.outputs.tag }}
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Setup Rust
+      - name: Setup Rust from rust-toolchain.toml
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish
+        shell: pwsh
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked
+
+  publish_crates_on_tag_push:
+    name: Step 3 - publish to crates.io (tag push, Windows)
+    if: ${{ github.event_name == 'push' }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    needs: [requirements]
+
+    steps:
+      - name: Checkout at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Rust from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish
+        shell: pwsh
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked
+
+  build_windows_after_tag:
+    name: Step 4 - build Windows asset (after tag)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.plan == 'full' }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    needs: [requirements, tag]
+    outputs:
+      tag: ${{ needs.tag.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      asset: ${{ steps.pack.outputs.asset }}
+
+    steps:
+      - name: Checkout at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Rust from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
 
       - name: Cache
         uses: Swatinem/rust-cache@v2
@@ -296,13 +398,144 @@ jobs:
           path: ${{ steps.pack.outputs.asset }}
           if-no-files-found: error
 
-  github_release:
-    name: Step 5 - publish GitHub Release
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.plan == 'full' || inputs.plan == 'github_release')) }}
-    runs-on: ubuntu-latest
+  build_windows_by_tag:
+    name: Step 4 - build Windows asset (manual tag)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.plan == 'github_release' }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    needs: [requirements]
+    outputs:
+      tag: ${{ steps.ref.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      asset: ${{ steps.pack.outputs.asset }}
+
+    steps:
+      - name: Require inputs.tag
+        id: ref
+        shell: pwsh
+        run: |
+          if ("${{ inputs.tag }}" -eq "") { throw "inputs.tag is required for plan=github_release" }
+          "tag=${{ inputs.tag }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Checkout at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Rust from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Read version
+        id: v
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $pkg = $meta.packages | Where-Object { $_.name -eq "rust-switcher" } | Select-Object -First 1
+          if (-not $pkg) { throw "Package rust-switcher not found in cargo metadata" }
+          $version = $pkg.version
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Version: $version"
+
+      - name: Build
+        shell: pwsh
+        run: cargo build --release --locked
+
+      - name: Package
+        id: pack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ steps.v.outputs.version }}"
+          $asset = "rust-switcher-$version-windows-x86_64.zip"
+          Compress-Archive -Path "target/release/rust-switcher.exe" -DestinationPath $asset -Force
+          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Asset: $asset"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-asset
+          path: ${{ steps.pack.outputs.asset }}
+          if-no-files-found: error
+
+  build_windows_on_tag_push:
+    name: Step 4 - build Windows asset (tag push)
+    if: ${{ github.event_name == 'push' }}
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    needs: [requirements]
+    outputs:
+      tag: ${{ github.ref_name }}
+      version: ${{ steps.v.outputs.version }}
+      asset: ${{ steps.pack.outputs.asset }}
+
+    steps:
+      - name: Checkout at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup Rust from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+          cache-on-failure: true
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Read version
+        id: v
+        shell: pwsh
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $pkg = $meta.packages | Where-Object { $_.name -eq "rust-switcher" } | Select-Object -First 1
+          if (-not $pkg) { throw "Package rust-switcher not found in cargo metadata" }
+          $version = $pkg.version
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Version: $version"
+
+      - name: Build
+        shell: pwsh
+        run: cargo build --release --locked
+
+      - name: Package
+        id: pack
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = "${{ steps.v.outputs.version }}"
+          $asset = "rust-switcher-$version-windows-x86_64.zip"
+          Compress-Archive -Path "target/release/rust-switcher.exe" -DestinationPath $asset -Force
+          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Asset: $asset"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-asset
+          path: ${{ steps.pack.outputs.asset }}
+          if-no-files-found: error
+
+  github_release_after_tag:
+    name: Step 5 - publish GitHub Release (after tag)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.plan == 'full' }}
+    runs-on: windows-latest
     permissions:
       contents: write
-    needs: [build_windows]
+    needs: [build_windows_after_tag]
 
     steps:
       - name: Download artifact
@@ -313,7 +546,51 @@ jobs:
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.build_windows.outputs.tag }}
-          name: ${{ needs.build_windows.outputs.tag }}
+          tag_name: ${{ needs.build_windows_after_tag.outputs.tag }}
+          name: ${{ needs.build_windows_after_tag.outputs.tag }}
           generate_release_notes: true
-          files: ${{ needs.build_windows.outputs.asset }}
+          files: ${{ needs.build_windows_after_tag.outputs.asset }}
+
+  github_release_by_tag:
+    name: Step 5 - publish GitHub Release (manual tag)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.plan == 'github_release' }}
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    needs: [build_windows_by_tag]
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-asset
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build_windows_by_tag.outputs.tag }}
+          name: ${{ needs.build_windows_by_tag.outputs.tag }}
+          generate_release_notes: true
+          files: ${{ needs.build_windows_by_tag.outputs.asset }}
+
+  github_release_on_tag_push:
+    name: Step 5 - publish GitHub Release (tag push)
+    if: ${{ github.event_name == 'push' }}
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    needs: [build_windows_on_tag_push]
+
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-asset
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build_windows_on_tag_push.outputs.tag }}
+          name: ${{ needs.build_windows_on_tag_push.outputs.tag }}
+          generate_release_notes: true
+          files: ${{ needs.build_windows_on_tag_push.outputs.asset }}
