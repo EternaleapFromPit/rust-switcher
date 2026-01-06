@@ -99,40 +99,88 @@ jobs:
         shell: pwsh
         run: cargo install cargo-edit --locked --version 0.13.0
 
-      - name: Bump version in Cargo.toml
-        shell: pwsh
-        run: cargo set-version --bump "${{ inputs.bump }}"
-
-      - name: Update Cargo.lock (no dependency upgrades)
-        shell: pwsh
-        run: cargo build -p rust-switcher --release --locked
-
-      - name: Read version and tag
+      - name: Compute next version from latest repo tag, set version, update lock
         id: version
         shell: pwsh
         run: |
-          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-          if (-not $meta.workspace_members -or $meta.workspace_members.Count -lt 1) {
-            throw "cargo metadata returned empty workspace_members"
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = "Stop"
+
+          git fetch --tags --force origin
+
+          function Parse-TagToSemVer([string]$tag) {
+            if ($tag -match '^v(\d+)\.(\d+)\.(\d+)$') {
+              return [pscustomobject]@{
+                Major = [int]$Matches[1]
+                Minor = [int]$Matches[2]
+                Patch = [int]$Matches[3]
+              }
+            }
+            return $null
           }
-          $memberId = $meta.workspace_members[0]
-          $pkg = $meta.packages | Where-Object { $_.id -eq $memberId } | Select-Object -First 1
-          if (-not $pkg) { throw "Unable to determine workspace root package from cargo metadata" }
 
-          $version = $pkg.version
-          $tag = "v$version"
+          function Compare-SemVer($a, $b) {
+            if ($a.Major -ne $b.Major) { return [Math]::Sign($a.Major - $b.Major) }
+            if ($a.Minor -ne $b.Minor) { return [Math]::Sign($a.Minor - $b.Minor) }
+            return [Math]::Sign($a.Patch - $b.Patch)
+          }
 
-          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          function SemVer-ToString($v) { return "$($v.Major).$($v.Minor).$($v.Patch)" }
 
-      - name: Ensure tag does not exist on origin
-        shell: pwsh
-        run: |
-          $tag = "${{ steps.version.outputs.tag }}"
-          git fetch --tags --force
-          git show-ref --tags --verify --quiet "refs/tags/$tag"
-          if ($LASTEXITCODE -eq 0) {
-            throw "Tag $tag already exists. Bump again or run with do_bump_and_tag=false and existing_tag=$tag."
+          function Bump-SemVer($v, [string]$bumpKind) {
+            $n = [pscustomobject]@{ Major = $v.Major; Minor = $v.Minor; Patch = $v.Patch }
+            switch ($bumpKind) {
+              "major" { $n.Major++; $n.Minor = 0; $n.Patch = 0 }
+              "minor" { $n.Minor++; $n.Patch = 0 }
+              "patch" { $n.Patch++ }
+              default { throw "Unexpected bump kind: $bumpKind" }
+            }
+            return $n
+          }
+
+          $tags = git tag -l "v[0-9]*.[0-9]*.[0-9]*"
+          $latest = $null
+
+          foreach ($t in $tags) {
+            $sv = Parse-TagToSemVer $t
+            if ($null -eq $sv) { continue }
+            if ($null -eq $latest) {
+              $latest = $sv
+              continue
+            }
+            if ((Compare-SemVer $sv $latest) -gt 0) { $latest = $sv }
+          }
+
+          if ($null -eq $latest) {
+            $latest = [pscustomobject]@{ Major = 0; Minor = 0; Patch = 0 }
+          }
+
+          $bump = "${{ inputs.bump }}"
+          $candidate = Bump-SemVer $latest $bump
+
+          $maxRetries = 200
+          for ($i = 0; $i -lt $maxRetries; $i++) {
+            $version = SemVer-ToString $candidate
+            $tag = "v$version"
+
+            $remote = git ls-remote --tags origin "refs/tags/$tag"
+            if (-not $remote) {
+              cargo set-version $version
+
+              cargo build -p rust-switcher --release
+
+              "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+              Write-Host "Latest tag in repo: v$($latest.Major).$($latest.Minor).$($latest.Patch)"
+              Write-Host "Chosen: $tag"
+              break
+            }
+
+            $candidate.Patch++
+            if ($i -eq ($maxRetries - 1)) {
+              throw "Unable to find a free tag after $maxRetries attempts starting from $tag"
+            }
           }
 
       - name: Configure git identity
