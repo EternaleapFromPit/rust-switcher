@@ -7,6 +7,7 @@ pub mod notify;
 use windows::{
     Win32::{
         Foundation::{HWND, RECT},
+        System::SystemServices::SS_RIGHT,
         UI::WindowsAndMessaging::{
             BS_AUTOCHECKBOX, BS_GROUPBOX, CreateWindowExW, ES_NUMBER, ES_READONLY, GetClientRect,
             SetWindowTextW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP,
@@ -119,6 +120,33 @@ pub fn create_controls(hwnd: HWND, state: &mut AppState) -> windows::core::Resul
     create_settings_group(hwnd, state, &l)?;
     create_hotkeys_group(hwnd, state, &l)?;
     create_buttons(hwnd, state, &l)?;
+    create_version_label(hwnd, &l, client_w)?;
+
+    Ok(())
+}
+
+fn create_version_label(hwnd: HWND, l: &UiLayout, client_w: i32) -> windows::core::Result<()> {
+    let btn_y = l.top_y + l.group_h + 10;
+
+    let version_w = 90;
+    let version_h = 18;
+    let version_x = client_w - l.left_x - version_w;
+    let version_y = btn_y + 7;
+
+    let h = create(
+        hwnd,
+        ControlSpec {
+            ex_style: WINDOW_EX_STYLE(0),
+            class: w!("STATIC"),
+            text: w!(""),
+            style: ws_i32(WS_CHILD | WS_VISIBLE, SS_RIGHT.0 as i32),
+            rect: RectI::new(version_x, version_y, version_w, version_h),
+            menu: None,
+        },
+    )?;
+
+    let text = format!("v{}", env!("CARGO_PKG_VERSION"));
+    crate::utils::helpers::set_edit_text(h, &text)?;
 
     Ok(())
 }
