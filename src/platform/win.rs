@@ -11,6 +11,7 @@ pub(crate) mod hotkey_format;
 pub(crate) mod keyboard;
 pub(crate) mod mouse;
 mod state;
+mod themes;
 pub(crate) mod tray;
 mod tray_dispatch;
 mod visuals;
