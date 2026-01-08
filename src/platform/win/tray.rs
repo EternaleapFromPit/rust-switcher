@@ -37,8 +37,7 @@ unsafe fn show_popup_menu_at_cursor(hwnd: HWND, hmenu: HMENU) -> u32 {
 
     let _ = unsafe { SetForegroundWindow(hwnd) };
 
-    let result =
-    unsafe {
+    let result = unsafe {
         TrackPopupMenu(
             hmenu,
             TPM_RETURNCMD | TPM_BOTTOMALIGN | TPM_RIGHTALIGN | TPM_NOANIMATION | TPM_RIGHTBUTTON,
@@ -344,17 +343,27 @@ pub fn show_tray_context_menu(
     hwnd: HWND,
     window_visible: bool,
     autoconvert_enabled: bool,
-    current_theme_dark: bool
+    current_theme_dark: bool,
 ) -> Result<TrayMenuAction> {
     unsafe {
         let hmenu = build_tray_menu(window_visible, autoconvert_enabled, current_theme_dark)?;
         let cmd = show_popup_menu_at_cursor(hwnd, hmenu);
         let _ = DestroyMenu(hmenu);
-        handle_tray_menu_cmd(hwnd, window_visible, autoconvert_enabled, current_theme_dark, cmd)
+        handle_tray_menu_cmd(
+            hwnd,
+            window_visible,
+            autoconvert_enabled,
+            current_theme_dark,
+            cmd,
+        )
     }
 }
 
-fn build_tray_menu(window_visible: bool, autoconvert_enabled: bool, current_theme_dark: bool) -> Result<HMENU> {
+fn build_tray_menu(
+    window_visible: bool,
+    autoconvert_enabled: bool,
+    current_theme_dark: bool,
+) -> Result<HMENU> {
     let hmenu = unsafe { CreatePopupMenu() }?;
 
     unsafe { append_autoconvert_toggle_item(hmenu, autoconvert_enabled) }?;
@@ -400,7 +409,11 @@ unsafe fn append_autoconvert_toggle_item(hmenu: HMENU, autoconvert_enabled: bool
 unsafe fn append_change_theme_item(hmenu: HMENU, current_theme_dark: bool) -> Result<()> {
     use windows::Win32::UI::WindowsAndMessaging::{AppendMenuW, MF_STRING};
 
-    let text = if current_theme_dark { "Light\0" } else { "Dark\0" };
+    let text = if current_theme_dark {
+        "Light\0"
+    } else {
+        "Dark\0"
+    };
     let wide: Vec<u16> = text.encode_utf16().collect();
 
     (unsafe {
@@ -458,12 +471,12 @@ unsafe fn handle_tray_menu_cmd(
         ID_SHOW_HIDE => {
             unsafe { toggle_window_visibility(hwnd, window_visible) };
             Ok(TrayMenuAction::None)
-        },
+        }
 
-        ID_CHANGE_THEME => { 
+        ID_CHANGE_THEME => {
             crate::platform::win::themes::set_window_theme(hwnd, current_theme_dark);
             Ok(TrayMenuAction::None)
-        },
+        }
 
         ID_EXIT => {
             (unsafe { request_process_exit(hwnd) })?;
