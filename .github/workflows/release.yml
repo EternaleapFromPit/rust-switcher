@@ -410,5 +410,5 @@ jobs:
           tag_name: ${{ needs.determine_tag.outputs.tag }}
           name: ${{ needs.determine_tag.outputs.tag }}
           files: |
-            "*.tar.gz"
-            "*.zip"
+            *.tar.gz
+            *.zip
