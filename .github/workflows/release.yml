@@ -1,18 +1,6 @@
 name: Release
 run-name: "Release on ${{ github.ref_name }} bump ${{ inputs.bump }} | bump_tag=${{ inputs.do_bump_and_tag }} crates=${{ inputs.do_publish_crates }} github=${{ inputs.do_github_release }}"
 
-# Requirements (do not remove):
-# - Target platform: Linux, we ship rust-switcher binary packaged for GitHub Release
-# - Rust toolchain: nightly, pinned by rust-toolchain.toml in repo root
-# - Release flow:
-#   Step 1: bump version + commit + tag + push (main)
-#   Step 2: publish to crates.io from tag
-#   Step 3: build Linux archive from tag
-#   Step 4: create GitHub Release and attach the archive (tag)
-# - Caching and tooling:
-#   - Use Swatinem/rust-cache@v2 in all jobs to cache cargo registry, git deps, and target artifacts
-#   - Use cargo-binstall to install helper cargo subcommands fast (cargo-set-version)
-
 on:
   workflow_dispatch:
     inputs:
@@ -65,15 +53,15 @@ jobs:
   bump_and_tag:
     name: "Step 1 - bump version and create tag on main (Linux)"
     runs-on: ubuntu-latest
-    if: "${{ inputs.do_bump_and_tag }}"
+    if: ${{ inputs.do_bump_and_tag }}
 
     outputs:
-      tag: "${{ steps.version.outputs.tag }}"
-      version: "${{ steps.version.outputs.version }}"
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Verify main branch
-        if: "${{ github.ref != 'refs/heads/main' }}"
+        if: ${{ github.ref != 'refs/heads/main' }}
         shell: bash
         run: |
           echo "Release workflow must be run on main branch when do_bump_and_tag=true. Current ref: $GITHUB_REF" >&2
@@ -81,6 +69,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Rust toolchain (rust-toolchain.toml)
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -88,7 +78,7 @@ jobs:
       - name: Cache Rust build (cargo, target)
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "release"
+          shared-key: release
 
       - name: Verify nightly toolchain
         shell: bash
@@ -105,97 +95,38 @@ jobs:
 
       - name: Install cargo-set-version via binstall
         shell: bash
-        run: cargo binstall cargo-set-version -y
+        run: |
+          set -euo pipefail
+          cargo binstall cargo-set-version -y
 
-      - name: Compute next version from latest repo tag and Cargo.toml, set version, update lock
+      - name: Bump version, update lock, compute tag
         id: version
         shell: bash
         env:
-          BUMP: "${{ inputs.bump }}"
+          BUMP: ${{ inputs.bump }}
         run: |
           set -euo pipefail
 
-          read -r version tag < <(python - <<'PY'
-import json
-import os
-import re
-import subprocess
-import sys
+          cargo set-version --bump "$BUMP"
+          cargo generate-lockfile
 
-bump = os.environ["BUMP"]
-
-
-def parse(s: str):
-    match = re.match(r"^(\d+)\.(\d+)\.(\d+)$", s)
-    if not match:
-        return None
-    return tuple(int(part) for part in match.groups())
-
-
-def bump_ver(version, kind: str):
-    major, minor, patch = version
-    if kind == "major":
-        return (major + 1, 0, 0)
-    if kind == "minor":
-        return (major, minor + 1, 0)
-    if kind == "patch":
-        return (major, minor, patch + 1)
-    raise SystemExit(f"Unexpected bump kind: {kind}")
-
-
-meta = json.loads(
-    subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"])
-)
-member_id = meta["workspace_members"][0]
-pkg = next(pkg for pkg in meta["packages"] if pkg["id"] == member_id)
-current_version = pkg["version"]
-current = parse(current_version)
-if current is None:
-    raise SystemExit(f"Current Cargo.toml version is not semver X.Y.Z: {current_version}")
-
-tags_raw = subprocess.check_output(
-    ["git", "ls-remote", "--tags", "origin", "refs/tags/v[0-9]*.[0-9]*.[0-9]*"]
-).decode()
-tags = []
-for line in tags_raw.splitlines():
-    parts = line.split("\t")
-    if len(parts) < 2:
-        continue
-    ref = parts[1]
-    match = re.match(r"^refs/tags/v(\d+)\.(\d+)\.(\d+)$", ref)
-    if not match:
-        continue
-    tags.append(tuple(int(part) for part in match.groups()))
-
-latest = max(tags) if tags else (0, 0, 0)
-base = max(current, latest)
-candidate = bump_ver(base, bump)
-for _ in range(500):
-    version = f"{candidate[0]}.{candidate[1]}.{candidate[2]}"
-    tag = f"v{version}"
-    if version == current_version:
-        candidate = (candidate[0], candidate[1], candidate[2] + 1)
-        continue
-    remote = subprocess.check_output(
-        ["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}"]
-    ).decode().strip()
-    if remote:
-        candidate = (candidate[0], candidate[1], candidate[2] + 1)
-        continue
-    print(version, tag)
-    sys.exit(0)
-
-raise SystemExit("Failed to find available version tag after 500 attempts")
-PY
-          )
-
-          cargo set-version "$version"
           if [ -z "$(git diff --name-only -- Cargo.toml)" ]; then
-            echo "cargo set-version produced no changes for version=$version" >&2
+            echo "cargo set-version produced no Cargo.toml change" >&2
             exit 1
           fi
 
-          cargo generate-lockfile
+          version="$(cargo pkgid -p rust-switcher | sed -n 's/.*@//p')"
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Failed to extract semver from cargo pkgid: $version" >&2
+            exit 1
+          fi
+
+          tag="v$version"
+
+          if git ls-remote --tags origin "refs/tags/$tag" | grep -q .; then
+            echo "Tag already exists on origin: $tag" >&2
+            exit 1
+          fi
 
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -203,36 +134,41 @@ PY
       - name: Configure git identity
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Commit release changes
         shell: bash
         run: |
+          set -euo pipefail
           git add Cargo.toml Cargo.lock
-          git diff --cached --quiet
-          if [ $? -eq 0 ]; then
-            echo "No changes to commit after version selection. version=${{ steps.version.outputs.version }} tag=${{ steps.version.outputs.tag }}" >&2
+          if git diff --cached --quiet; then
+            echo "No changes to commit after version bump. version=${{ steps.version.outputs.version }} tag=${{ steps.version.outputs.tag }}" >&2
             exit 1
           fi
           git commit -m "release: ${{ steps.version.outputs.tag }}"
 
       - name: Create tag locally
         shell: bash
-        run: git tag "${{ steps.version.outputs.tag }}"
+        run: |
+          set -euo pipefail
+          git tag "${{ steps.version.outputs.tag }}"
 
       - name: Push commit and tag to origin
         shell: bash
-        run: git push --atomic origin HEAD:main "${{ steps.version.outputs.tag }}"
+        run: |
+          set -euo pipefail
+          git push --atomic origin HEAD:main "${{ steps.version.outputs.tag }}"
 
   determine_tag:
     name: Determine tag to use
     runs-on: ubuntu-latest
     needs: bump_and_tag
-    if: "${{ always() && (inputs.do_bump_and_tag || inputs.existing_tag != '') }}"
+    if: ${{ always() && (inputs.do_bump_and_tag || inputs.existing_tag != '') }}
 
     outputs:
-      tag: "${{ steps.resolve.outputs.tag }}"
+      tag: ${{ steps.resolve.outputs.tag }}
 
     steps:
       - name: Resolve tag
@@ -250,139 +186,30 @@ PY
             exit 0
           fi
 
-          if [ -z "${{ inputs.existing_tag }}" ]; then
+          tag="${{ inputs.existing_tag }}"
+          if [ -z "$tag" ]; then
             echo "existing_tag is required when do_bump_and_tag=false" >&2
             exit 1
           fi
-
-          echo "tag=${{ inputs.existing_tag }}" >> "$GITHUB_OUTPUT"
-
-  build_linux_binary:
-    name: "Step 3 - build Linux binary (tag ref)"
-    runs-on: ubuntu-latest
-    needs: determine_tag
-    if: "${{ inputs.do_github_release }}"
-
-    outputs:
-      bin: "${{ steps.build.outputs.bin }}"
-
-    steps:
-      - name: Checkout at tag
-        uses: actions/checkout@v4
-        with:
-          ref: "${{ needs.determine_tag.outputs.tag }}"
-
-      - name: Setup Rust toolchain (rust-toolchain.toml)
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Cache Rust build (cargo, target)
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "release"
-
-      - name: Verify nightly toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          rustc -Vv
-          if ! rustc -Vv | grep -q "release:.*nightly"; then
-            echo "Expected nightly toolchain from rust-toolchain.toml, but rustc -Vv does not show nightly." >&2
+          if ! echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "existing_tag must look like v1.2.3, got: $tag" >&2
             exit 1
           fi
 
-      - name: Build (locked)
-        id: build
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo build -p rust-switcher --release --locked
-          echo "bin=target/release/rust-switcher" >> "$GITHUB_OUTPUT"
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-binary
-          path: "${{ steps.build.outputs.bin }}"
-          if-no-files-found: error
-
-  build_linux_asset:
-    name: "Step 4 - package Linux archive (tag ref)"
-    runs-on: ubuntu-latest
-    needs: [determine_tag, build_linux_binary]
-    if: "${{ inputs.do_github_release }}"
-
-    outputs:
-      asset: "${{ steps.package.outputs.asset }}"
-
-    steps:
-      - name: Checkout at tag
-        uses: actions/checkout@v4
-        with:
-          ref: "${{ needs.determine_tag.outputs.tag }}"
-
-      - name: Setup Rust toolchain (rust-toolchain.toml)
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-
-      - name: Cache Rust build (cargo, target)
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "release"
-
-      - name: Verify nightly toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          rustc -Vv
-          if ! rustc -Vv | grep -q "release:.*nightly"; then
-            echo "Expected nightly toolchain from rust-toolchain.toml, but rustc -Vv does not show nightly." >&2
-            exit 1
-          fi
-
-      - name: Download built binary
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-binary
-
-      - name: Package archive
-        id: package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          version=$(cargo metadata --no-deps --format-version 1 | python - <<'PY'
-import json
-import sys
-
-meta = json.load(sys.stdin)
-member_id = meta["workspace_members"][0]
-pkg = next(pkg for pkg in meta["packages"] if pkg["id"] == member_id)
-print(pkg["version"])
-PY
-          )
-
-          asset="rust-switcher-$version-linux-x86_64.tar.gz"
-          chmod +x rust-switcher
-          tar -czf "$asset" rust-switcher
-          echo "asset=$asset" >> "$GITHUB_OUTPUT"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-asset
-          path: "${{ steps.package.outputs.asset }}"
-          if-no-files-found: error
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
   publish_crates:
     name: "Step 2 - publish to crates.io (tag ref)"
     runs-on: ubuntu-latest
     needs: determine_tag
-    if: "${{ inputs.do_publish_crates }}"
+    if: ${{ inputs.do_publish_crates }}
 
     steps:
       - name: Checkout at tag
         uses: actions/checkout@v4
         with:
-          ref: "${{ needs.determine_tag.outputs.tag }}"
+          ref: ${{ needs.determine_tag.outputs.tag }}
+          fetch-depth: 0
 
       - name: Setup Rust toolchain (rust-toolchain.toml)
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -390,7 +217,7 @@ PY
       - name: Cache Rust build (cargo, target)
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "release"
+          shared-key: release
 
       - name: Verify nightly toolchain
         shell: bash
@@ -404,14 +231,80 @@ PY
 
       - name: Publish to crates.io (no verify)
         env:
-          CARGO_REGISTRY_TOKEN: "${{ secrets.CARGO_REGISTRY_TOKEN }}"
-        run: cargo publish --locked --no-verify
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo publish --locked --no-verify
+
+  build_linux_asset:
+    name: "Step 3 - build and package Linux archive (tag ref)"
+    runs-on: ubuntu-latest
+    needs: determine_tag
+    if: ${{ inputs.do_github_release }}
+
+    outputs:
+      asset: ${{ steps.package.outputs.asset }}
+
+    steps:
+      - name: Checkout at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.determine_tag.outputs.tag }}
+
+      - name: Setup Rust toolchain (rust-toolchain.toml)
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Cache Rust build (cargo, target)
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
+
+      - name: Verify nightly toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc -Vv
+          if ! rustc -Vv | grep -q "release:.*nightly"; then
+            echo "Expected nightly toolchain from rust-toolchain.toml, but rustc -Vv does not show nightly." >&2
+            exit 1
+          fi
+
+      - name: Build (locked)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p rust-switcher --release --locked
+
+      - name: Package tar.gz
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(cargo pkgid -p rust-switcher | sed -n 's/.*@//p')"
+          if ! echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Failed to extract semver from cargo pkgid: $version" >&2
+            exit 1
+          fi
+
+          asset="rust-switcher-$version-linux-x86_64.tar.gz"
+          install -m 0755 target/release/rust-switcher ./rust-switcher
+          tar -czf "$asset" rust-switcher
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-asset
+          path: ${{ steps.package.outputs.asset }}
+          if-no-files-found: error
 
   github_release:
-    name: "Step 5 - publish GitHub Release (tag ref)"
+    name: "Step 4 - publish GitHub Release (tag ref)"
     runs-on: ubuntu-latest
-    needs: [determine_tag, build_linux_asset]
-    if: "${{ inputs.do_github_release }}"
+    needs: [determine_tag, build_linux_asset, publish_crates]
+    if: ${{ inputs.do_github_release }}
 
     steps:
       - name: Download Linux asset
@@ -422,6 +315,6 @@ PY
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "${{ needs.determine_tag.outputs.tag }}"
-          name: "${{ needs.determine_tag.outputs.tag }}"
+          tag_name: ${{ needs.determine_tag.outputs.tag }}
+          name: ${{ needs.determine_tag.outputs.tag }}
           files: "*.tar.gz"
