@@ -464,7 +464,6 @@ unsafe fn handle_tray_menu_cmd(
     current_theme_dark: bool,
     cmd: u32,
 ) -> Result<TrayMenuAction> {
-    crate::utils::helpers::debug_log(&format!("cmd={cmd}"));
     match cmd {
         ID_AUTOCONVERT_TOGGLE => Ok(TrayMenuAction::ToggleAutoConvert),
 

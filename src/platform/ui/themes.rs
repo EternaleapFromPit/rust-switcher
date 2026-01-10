@@ -157,8 +157,6 @@ pub fn on_erase_background(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESU
 
 #[allow(clippy::useless_format)]
 pub fn set_window_theme(hwnd_main: HWND, current_theme_dark: bool) {
-    crate::utils::helpers::debug_log(&format!("dark={current_theme_dark}"));
-
     unsafe {
         if !current_theme_dark {
             let mut dark_mode: BOOL = BOOL(1);
@@ -178,7 +176,6 @@ pub fn set_window_theme(hwnd_main: HWND, current_theme_dark: bool) {
             with_state_mut_do(hwnd_main, |state| {
                 state.current_theme_dark = true;
             });
-            crate::utils::helpers::debug_log(&format!("dark mode set to TRUE"));
         } else {
             // Revert to light mode
             let mut light_mode: BOOL = BOOL(0);
@@ -192,7 +189,6 @@ pub fn set_window_theme(hwnd_main: HWND, current_theme_dark: bool) {
             with_state_mut_do(hwnd_main, |state| {
                 state.current_theme_dark = false;
             });
-            crate::utils::helpers::debug_log(&format!("dark mode set to FALSE"));
         }
 
         // Force window repaint to apply the theme changes
