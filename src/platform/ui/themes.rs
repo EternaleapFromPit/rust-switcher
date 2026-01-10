@@ -1,6 +1,3 @@
-use windows::Win32::Graphics::Gdi::{
-    SetBkColor, // For SetBkColor
-};
 use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -8,8 +5,8 @@ use windows::{
             Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute},
             Gdi::{
                 COLOR_WINDOW, COLOR_WINDOWTEXT, CreateSolidBrush, DeleteObject, FillRect,
-                GetSysColor, GetSysColorBrush, HBRUSH, HDC, HGDIOBJ, SetBkMode, SetTextColor,
-                TRANSPARENT,
+                GetSysColor, GetSysColorBrush, HBRUSH, HDC, HGDIOBJ, SetBkColor, SetBkMode,
+                SetTextColor, TRANSPARENT,
             },
         },
         UI::{Controls::SetWindowTheme, WindowsAndMessaging::GetClientRect},
@@ -19,7 +16,7 @@ use windows::{
 
 use crate::platform::win::state::{get_state, with_state_mut_do};
 
-// Define RGNDATA structure (simplified - we only need a pointer to it)
+// RGNDATA structure (simplified - we only need a pointer to it)
 #[repr(C)]
 #[allow(clippy::upper_case_acronyms)]
 pub struct RGNDATA {
@@ -42,7 +39,6 @@ const RDW_INVALIDATE: u32 = 0x0001;
 const RDW_ALLCHILDREN: u32 = 0x0080;
 
 /// Handles `WM_CTLCOLOR*` style messages by configuring the device context and returning a brush.
-///
 /// Expected usage:
 /// - called from a window procedure when processing control color messages
 /// - `wparam` is interpreted as an `HDC` for the control being painted
@@ -105,7 +101,6 @@ pub fn on_color_static(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
     return on_ctlcolor(wparam, _lparam);
 }
 
-#[allow(clippy::useless_format)]
 #[allow(clippy::needless_return)]
 #[allow(clippy::unnecessary_cast)]
 pub fn on_color_edit(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
@@ -124,7 +119,6 @@ pub fn on_color_edit(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
     return on_ctlcolor(wparam, _lparam);
 }
 
-#[allow(clippy::useless_format)]
 #[allow(clippy::needless_return)]
 pub fn on_erase_background(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
     if let Some(state) = get_state(hwnd)
@@ -155,7 +149,6 @@ pub fn on_erase_background(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESU
     }
 }
 
-#[allow(clippy::useless_format)]
 pub fn set_window_theme(hwnd_main: HWND, current_theme_dark: bool) {
     unsafe {
         if !current_theme_dark {

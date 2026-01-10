@@ -335,9 +335,10 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         //When sent: Before an edit control is drawn.
         WM_CTLCOLOREDIT => on_color_edit(hwnd, wparam, lparam),
 
+        //Allows the application to customize the window background instead of using the default system color
+        //Sent by Windows when a window's background needs to be cleared/repainted
         WM_ERASEBKGND => on_erase_background(hwnd, wparam, lparam),
 
-        //WM_CTLCOLORDLG | WM_CTLCOLORSTATIC |
         //For buttons
         WM_CTLCOLORBTN => on_ctlcolor(wparam, lparam),
         WM_SYSCOMMAND => {
