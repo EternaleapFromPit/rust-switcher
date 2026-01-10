@@ -72,7 +72,9 @@ pub fn on_ctlcolor(wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
 #[allow(clippy::unnecessary_cast)]
 #[allow(clippy::needless_return)]
 pub fn on_color_dialog(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd) && state.current_theme_dark {
+    if let Some(state) = get_state(hwnd)
+        && state.current_theme_dark
+    {
         let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
         unsafe {
             SetBkColor(hdc, COLORREF(0x002D2D30));
@@ -88,7 +90,9 @@ pub fn on_color_dialog(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
 #[allow(clippy::unnecessary_cast)]
 #[allow(clippy::needless_return)]
 pub fn on_color_static(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd) && state.current_theme_dark {
+    if let Some(state) = get_state(hwnd)
+        && state.current_theme_dark
+    {
         let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
         unsafe {
             SetBkColor(hdc, COLORREF(0x002D2D30)); // 0x00BBGGRR
@@ -105,7 +109,9 @@ pub fn on_color_static(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
 #[allow(clippy::needless_return)]
 #[allow(clippy::unnecessary_cast)]
 pub fn on_color_edit(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd) && state.current_theme_dark {
+    if let Some(state) = get_state(hwnd)
+        && state.current_theme_dark
+    {
         let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
         unsafe {
             SetBkColor(hdc, COLORREF(0x001E1E1E)); // Dark gray for dark theme
@@ -121,7 +127,9 @@ pub fn on_color_edit(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
 #[allow(clippy::useless_format)]
 #[allow(clippy::needless_return)]
 pub fn on_erase_background(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd) && state.current_theme_dark {
+    if let Some(state) = get_state(hwnd)
+        && state.current_theme_dark
+    {
         // Paint main window background
         let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
         let mut rect = RECT::default();
