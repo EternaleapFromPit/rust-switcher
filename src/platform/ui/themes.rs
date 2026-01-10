@@ -1,9 +1,16 @@
+use windows::Win32::Graphics::Gdi::{
+    SetBkColor, // For SetBkColor
+};
 use windows::{
     Win32::{
-        Foundation::{COLORREF, HWND, RECT},
+        Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::{
             Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute},
-            Gdi::{CreateSolidBrush, FillRect},
+            Gdi::{
+                COLOR_WINDOW, COLOR_WINDOWTEXT, CreateSolidBrush, DeleteObject, FillRect,
+                GetSysColor, GetSysColorBrush, HBRUSH, HDC, HGDIOBJ, SetBkMode, SetTextColor,
+                TRANSPARENT,
+            },
         },
         UI::{Controls::SetWindowTheme, WindowsAndMessaging::GetClientRect},
     },
@@ -14,6 +21,7 @@ use crate::platform::win::state::{get_state, with_state_mut_do};
 
 // Define RGNDATA structure (simplified - we only need a pointer to it)
 #[repr(C)]
+#[allow(clippy::upper_case_acronyms)]
 pub struct RGNDATA {
     _private: [u8; 0], // Zero-sized type since we only pass null
 }
@@ -32,17 +40,6 @@ unsafe extern "system" {
 
 const RDW_INVALIDATE: u32 = 0x0001;
 const RDW_ALLCHILDREN: u32 = 0x0080;
-
-use windows::Win32::Graphics::Gdi::{
-    SetBkColor, // For SetBkColor
-};
-use windows::Win32::{
-    Foundation::{LPARAM, LRESULT, WPARAM},
-    Graphics::Gdi::{
-        COLOR_WINDOW, COLOR_WINDOWTEXT, DeleteObject, GetSysColor, GetSysColorBrush, HBRUSH, HDC,
-        HGDIOBJ, SetBkMode, SetTextColor, TRANSPARENT,
-    },
-};
 
 /// Handles `WM_CTLCOLOR*` style messages by configuring the device context and returning a brush.
 ///
@@ -72,91 +69,85 @@ pub fn on_ctlcolor(wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
     }
 }
 
+#[allow(clippy::unnecessary_cast)]
+#[allow(clippy::needless_return)]
 pub fn on_color_dialog(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd) {
-        if state.current_theme_dark {
-            let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
-            unsafe {
-                SetBkColor(hdc, COLORREF(0x002D2D30));
-                SetTextColor(hdc, COLORREF(0x00FFFFFF));
-                return LRESULT(
-                    CreateSolidBrush(COLORREF(0x002D2D30)).0 as *mut std::ffi::c_void as isize,
-                );
-            }
-        } else {
-            return on_ctlcolor(wparam, _lparam);
+    if let Some(state) = get_state(hwnd) && state.current_theme_dark {
+        let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
+        unsafe {
+            SetBkColor(hdc, COLORREF(0x002D2D30));
+            SetTextColor(hdc, COLORREF(0x00FFFFFF));
+            return LRESULT(
+                CreateSolidBrush(COLORREF(0x002D2D30)).0 as *mut std::ffi::c_void as isize,
+            );
         }
     }
-    return LRESULT(0);
+    return on_ctlcolor(wparam, _lparam);
 }
 
+#[allow(clippy::unnecessary_cast)]
+#[allow(clippy::needless_return)]
 pub fn on_color_static(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd) {
-        if state.current_theme_dark {
-            let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
-            unsafe {
-                SetBkColor(hdc, COLORREF(0x002D2D30)); // 0x00BBGGRR
-                SetTextColor(hdc, COLORREF(0x00FFFFFF));
-                return LRESULT(
-                    CreateSolidBrush(COLORREF(0x002D2D30)).0 as *mut std::ffi::c_void as isize,
-                );
-            }
-        } else {
-            return on_ctlcolor(wparam, _lparam);
+    if let Some(state) = get_state(hwnd) && state.current_theme_dark {
+        let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
+        unsafe {
+            SetBkColor(hdc, COLORREF(0x002D2D30)); // 0x00BBGGRR
+            SetTextColor(hdc, COLORREF(0x00FFFFFF));
+            return LRESULT(
+                CreateSolidBrush(COLORREF(0x002D2D30)).0 as *mut std::ffi::c_void as isize,
+            );
         }
     }
-    return LRESULT(0);
+    return on_ctlcolor(wparam, _lparam);
 }
 
+#[allow(clippy::useless_format)]
+#[allow(clippy::needless_return)]
+#[allow(clippy::unnecessary_cast)]
 pub fn on_color_edit(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd) {
-        if state.current_theme_dark {
-            let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
-            unsafe {
-                SetBkColor(hdc, COLORREF(0x001E1E1E)); // Dark gray for dark theme
-                SetTextColor(hdc, COLORREF(0x00FFFFFF)); // White text for dark theme
-                return LRESULT(
-                    CreateSolidBrush(COLORREF(0x002D2D30)).0 as *mut std::ffi::c_void as isize,
-                );
-            }
-        } else {
-            // Light theme - use system colors
-            return on_ctlcolor(wparam, _lparam);
+    if let Some(state) = get_state(hwnd) && state.current_theme_dark {
+        let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
+        unsafe {
+            SetBkColor(hdc, COLORREF(0x001E1E1E)); // Dark gray for dark theme
+            SetTextColor(hdc, COLORREF(0x00FFFFFF)); // White text for dark theme
+            return LRESULT(
+                CreateSolidBrush(COLORREF(0x002D2D30)).0 as *mut std::ffi::c_void as isize,
+            );
         }
     }
-    return LRESULT(0);
+    return on_ctlcolor(wparam, _lparam);
 }
 
+#[allow(clippy::useless_format)]
+#[allow(clippy::needless_return)]
 pub fn on_erase_background(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd) {
-        if state.current_theme_dark {
-            // Paint main window background
-            let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
-            let mut rect = RECT::default();
-            unsafe {
-                let _ = GetClientRect(hwnd, &mut rect);
-                let brush = CreateSolidBrush(COLORREF(0x002D2D30));
-                FillRect(hdc, &rect, brush);
-                let _ = DeleteObject(HGDIOBJ::from(brush));
-            }
-            return LRESULT(1);
-        } else {
-            // Explicit light theme background (white)
-            let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
-            let mut rect = RECT::default();
-            unsafe {
-                let _ = GetClientRect(hwnd, &mut rect);
-                let brush = CreateSolidBrush(COLORREF(0x00FFFFFF)); // White
-                // Or use system color: let brush = GetSysColorBrush(COLOR_WINDOW as i32);
-                FillRect(hdc, &rect, brush);
-                let _ = DeleteObject(HGDIOBJ::from(brush));
-            }
-            return LRESULT(1);
+    if let Some(state) = get_state(hwnd) && state.current_theme_dark {
+        // Paint main window background
+        let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
+        let mut rect = RECT::default();
+        unsafe {
+            let _ = GetClientRect(hwnd, &mut rect);
+            let brush = CreateSolidBrush(COLORREF(0x002D2D30));
+            FillRect(hdc, &rect, brush);
+            let _ = DeleteObject(HGDIOBJ::from(brush));
         }
+        return LRESULT(1);
+    } else {
+        // Explicit light theme background (white)
+        let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
+        let mut rect = RECT::default();
+        unsafe {
+            let _ = GetClientRect(hwnd, &mut rect);
+            let brush = CreateSolidBrush(COLORREF(0x00FFFFFF)); // White
+            // Or use system color: let brush = GetSysColorBrush(COLOR_WINDOW as i32);
+            FillRect(hdc, &rect, brush);
+            let _ = DeleteObject(HGDIOBJ::from(brush));
+        }
+        return LRESULT(1);
     }
-    return LRESULT(0);
 }
 
+#[allow(clippy::useless_format)]
 pub fn set_window_theme(hwnd_main: HWND, current_theme_dark: bool) {
     crate::utils::helpers::debug_log(&format!("dark={current_theme_dark}"));
 
