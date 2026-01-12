@@ -3,14 +3,6 @@
 //! This module provides theme-aware painting functions for Windows controls
 //! and handles dark/light theme switching.
 //!
-use windows::Win32::UI::Controls::{
-    DRAWITEMSTRUCT,
-    ODS_DEFAULT,
-    ODS_DISABLED, // ... other imports
-    ODS_FOCUS,
-    ODS_SELECTED,
-    ODT_BUTTON,
-};
 use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -25,7 +17,10 @@ use windows::{
             },
         },
         UI::{
-            Controls::SetWindowTheme,
+            Controls::{
+                DRAWITEMSTRUCT, ODS_DEFAULT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON,
+                SetWindowTheme,
+            },
             WindowsAndMessaging::{GetClientRect, *},
         },
     },
@@ -195,7 +190,7 @@ pub fn on_draw_item(_hwnd: HWND, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
                     return LRESULT(1); // We handled the drawing
                 }
                 None => {
-                    // ADD THESE LINES - Handle button when no state available
+                    // Handle button when no state available
                     let hdc = draw_item.hDC;
                     let rect = draw_item.rcItem;
 
