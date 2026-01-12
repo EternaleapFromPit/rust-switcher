@@ -37,7 +37,6 @@ use crate::platform::win::state::{get_state, with_state_mut_do};
 const RDW_INVALIDATE: u32 = 0x0001;
 const RDW_ALLCHILDREN: u32 = 0x0080;
 
-#[allow(dead_code)]
 pub fn on_draw_item(_hwnd: HWND, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
         let draw_item = &*(lparam.0 as *const DRAWITEMSTRUCT);
