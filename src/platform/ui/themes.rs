@@ -12,8 +12,8 @@ use windows::{
                 COLOR_WINDOW, COLOR_WINDOWTEXT, CreateSolidBrush, DT_CENTER, DT_SINGLELINE,
                 DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect, FrameRect,
                 GetSysColor, GetSysColorBrush, HBRUSH, HDC, HGDIOBJ, InvalidateRect,
-                REDRAW_WINDOW_FLAGS, RedrawWindow, SetBkColor, SetBkMode, SetTextColor,
-                TRANSPARENT, UpdateWindow,
+                RDW_ALLCHILDREN, RDW_INVALIDATE, REDRAW_WINDOW_FLAGS, RedrawWindow, SetBkColor,
+                SetBkMode, SetTextColor, TRANSPARENT, UpdateWindow,
             },
         },
         UI::{
@@ -26,9 +26,8 @@ use windows::{
     },
     core::{BOOL, w},
 };
-use windows::Win32::Graphics::Gdi::{RDW_INVALIDATE, RDW_ALLCHILDREN};
-use crate::platform::win::state::{get_state, with_state_mut_do};
 
+use crate::platform::win::state::{get_state, with_state_mut_do};
 
 /// Handles `WM_DRAWITEM` messages for owner-drawn buttons.
 /// Expected usage: called from a window procedure when processing `WM_DRAWITEM`
