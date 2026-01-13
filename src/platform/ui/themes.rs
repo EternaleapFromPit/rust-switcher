@@ -31,7 +31,7 @@ use crate::platform::win::state::{get_state, with_state_mut_do};
 
 /// Handles `WM_DRAWITEM` messages for owner-drawn buttons.
 /// Expected usage: called from a window procedure when processing `WM_DRAWITEM`
-//// What it does:
+/// What it does:
 /// - checks if the control being drawn is a button
 /// - retrieves the application state to determine the current theme
 /// - paints the button according to the current theme (dark or light)
