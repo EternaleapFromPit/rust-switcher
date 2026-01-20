@@ -21,15 +21,15 @@ pub(crate) use hotkey_format::{format_hotkey, format_hotkey_sequence};
 use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-        Graphics::Gdi::{DeleteObject, HFONT, HGDIOBJ},
+        Graphics::Gdi::{DeleteObject, HFONT, HGDIOBJ, UpdateWindow},
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::{
             DefWindowProcW, FindWindowW, GWLP_USERDATA, GetWindowLongPtrW, IsWindowVisible,
             PostMessageW, PostQuitMessage, RegisterWindowMessageW, SC_CLOSE, SC_MINIMIZE,
-            SIZE_MINIMIZED, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow, SetWindowLongPtrW,
-            ShowWindow, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN, WM_CTLCOLORDLG,
-            WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_HOTKEY, WM_SIZE, WM_SYSCOMMAND,
-            WM_TIMER, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
+            SIZE_MINIMIZED, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, SetForegroundWindow,
+            SetWindowLongPtrW, ShowWindow, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN,
+            WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_HOTKEY, WM_SIZE,
+            WM_SYSCOMMAND, WM_TIMER, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
         },
     },
     core::{PCWSTR, Result, w},
@@ -83,6 +83,9 @@ pub fn refresh_autostart_checkbox(state: &mut AppState) -> windows::core::Result
 fn apply_config_to_ui(state: &mut AppState, cfg: &config::Config) -> windows::core::Result<()> {
     helpers::set_edit_u32(state.edits.delay_ms, cfg.delay_ms)?;
 
+    helpers::set_checkbox(state.checkboxes.start_minimized, cfg.start_minimized);
+    refresh_autostart_checkbox(state)?;
+
     state.hotkey_values = crate::app::HotkeyValues::from_config(cfg);
     state.hotkey_sequence_values = crate::app::HotkeySequenceValues::from_config(cfg);
 
@@ -119,6 +122,8 @@ fn apply_config_to_ui(state: &mut AppState, cfg: &config::Config) -> windows::co
 
 fn read_ui_to_config(state: &AppState, mut cfg: config::Config) -> config::Config {
     cfg.delay_ms = helpers::get_edit_u32(state.edits.delay_ms).unwrap_or(cfg.delay_ms);
+
+    cfg.start_minimized = helpers::get_checkbox(state.checkboxes.start_minimized);
 
     cfg.hotkey_convert_last_word_sequence = state.hotkey_sequence_values.last_word;
     cfg.hotkey_pause_sequence = state.hotkey_sequence_values.pause;
@@ -290,7 +295,7 @@ fn on_create(hwnd: HWND) -> LRESULT {
 /// Start the main window and enter the message loop.
 ///
 /// This function is called from `main` after the single instance
-/// guard has been acquired.  It performs all initialization that
+/// guard has been acquired. It performs all initialization that
 /// requires unsafe code and returns any error to the caller.
 pub fn run(start_hidden: bool) -> Result<()> {
     unsafe {
@@ -307,8 +312,13 @@ pub fn run(start_hidden: bool) -> Result<()> {
 
         let hwnd = create_main_window(class_name, hinstance, style, x, y, window_w, window_h)?;
         set_window_icons(hwnd, hinstance);
-        let show_cmd = if start_hidden { SW_HIDE } else { SW_SHOW };
-        let _ = ShowWindow(hwnd, show_cmd);
+
+        if start_hidden {
+            let _ = ShowWindow(hwnd, SW_HIDE);
+        } else {
+            let _ = ShowWindow(hwnd, SW_SHOWNORMAL);
+            let _ = UpdateWindow(hwnd);
+        }
 
         message_loop()?;
     }

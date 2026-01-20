@@ -20,7 +20,15 @@ fn main() -> windows::core::Result<()> {
         return Ok(());
     };
 
-    let start_hidden = std::env::args().any(|arg| arg == platform::win::AUTOSTART_ARG);
+    let autostart_hidden = std::env::args().any(|arg| arg == platform::win::AUTOSTART_ARG);
+
+    let cfg_hidden = config::load()
+        .ok()
+        .map(|c| c.start_minimized)
+        .unwrap_or(false);
+
+    let start_hidden = autostart_hidden || cfg_hidden;
+
     platform::win::run(start_hidden)
 }
 
