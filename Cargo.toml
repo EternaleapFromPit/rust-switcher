@@ -18,12 +18,17 @@ lingua = { version = "1.7", default-features = false, features = [
     "english",
     "russian",
 ] }
-tracing = { version = "0.1", optional = true }
+tracing = { version = "0.1", features = ["release_max_level_off"] }
 tracing-subscriber = { version = "0.3", features = [
     "fmt",
     "env-filter",
 ], optional = true }
-tracing-appender = "0.2"
+tracing-appender = { version = "0.2", optional = true }
+
+[features]
+default = []
+debug-tracing = ["tracing-subscriber", "tracing-appender"]
+
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
@@ -46,12 +51,8 @@ windows = { version = "0.62", features = [
     "Win32_System_Ole",
     "Win32_Storage_FileSystem",
     "Win32_Graphics_Dwm",
-    "Win32_Graphics_Gdi"
 ] }
 
-[features]
-default = ["debug-tracing"]
-debug-tracing = ["tracing", "tracing-subscriber"]
 
 [build-dependencies]
 embed-resource = "3.0"
