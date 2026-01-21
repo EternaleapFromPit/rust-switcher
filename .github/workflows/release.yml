@@ -29,7 +29,7 @@ env:
 
 jobs:
   prepare_release:
-    name: "Step 1 - bump on dev, squash merge to main, tag main"
+    name: "Step 1 - bump via PR to dev, squash merge to main, tag main"
     runs-on: ubuntu-latest
 
     outputs:
@@ -49,6 +49,7 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Setup Rust toolchain (rust-toolchain.toml)
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -68,7 +69,7 @@ jobs:
             exit 1
           fi
 
-      - name: Bump version, update lock, compute tag
+      - name: Compute next version and tag
         id: version
         shell: bash
         env:
@@ -145,8 +146,32 @@ jobs:
             exit 1
           fi
 
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Configure git identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create bump branch and apply changes
+        id: bump_branch
+        shell: bash
+        env:
+          NEXT_VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          branch="release/bump-${TAG}"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+          git checkout -B "$branch" "origin/dev"
+
           tmp="$(mktemp)"
-          awk -v newver="$next" '
+          awk -v newver="$NEXT_VERSION" '
             BEGIN{in_pkg=0;done=0}
             /^\[package\]$/ {in_pkg=1; print; next}
             /^\[[^]]+\]$/ {in_pkg=0; print; next}
@@ -167,53 +192,119 @@ jobs:
 
           cargo generate-lockfile
 
-          if [ -z "$(git diff --name-only -- Cargo.toml)" ]; then
-            echo "Version bump produced no Cargo.toml change for version=$next" >&2
-            exit 1
-          fi
-
-          echo "version=$next" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: Configure git identity
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Commit release changes on dev
-        shell: bash
-        run: |
-          set -euo pipefail
           git add Cargo.toml Cargo.lock
           if git diff --cached --quiet; then
             echo "No changes to commit after version bump." >&2
             exit 1
           fi
-          git commit -m "release: ${{ steps.version.outputs.tag }}"
 
-      - name: Push dev
+          git commit -m "release: ${TAG}"
+
+      - name: Push bump branch
         shell: bash
         run: |
           set -euo pipefail
-          git push origin HEAD:dev
+          git push -u origin "${{ steps.bump_branch.outputs.branch }}"
 
-      - name: Create PR dev -> main and squash merge
+      - name: Create PR to dev and enable auto merge
+        id: pr_dev
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          BRANCH: ${{ steps.bump_branch.outputs.branch }}
         run: |
           set -euo pipefail
-          tag="${{ steps.version.outputs.tag }}"
 
-          pr_number="$(gh pr list --base main --head dev --state open --json number --jq '.[0].number // empty')"
+          pr_number="$(gh pr list --base dev --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
           if [ -z "$pr_number" ]; then
-            pr_url="$(gh pr create --base main --head dev --title "release: $tag" --body "")"
+            pr_url="$(gh pr create --base dev --head "$BRANCH" --title "release: ${TAG}" --body "")"
             pr_number="$(echo "$pr_url" | sed -n 's#.*/pull/##p')"
           fi
 
-          gh pr merge "$pr_number" --squash --admin --subject "release: $tag" --body ""
+          gh pr merge "$pr_number" --squash --auto --subject "release: ${TAG}" --body ""
+
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for PR merge into dev
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr_dev.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          tries=240
+          while [ "$tries" -gt 0 ]; do
+            state="$(gh pr view "$PR_NUMBER" --json state --jq '.state')"
+            merged="$(gh pr view "$PR_NUMBER" --json merged --jq '.merged')"
+
+            if [ "$merged" = "true" ]; then
+              exit 0
+            fi
+
+            if [ "$state" != "OPEN" ]; then
+              echo "PR is not open and not merged. state=$state" >&2
+              exit 1
+            fi
+
+            sleep 10
+            tries=$((tries-1))
+          done
+
+          echo "Timed out waiting for PR to merge into dev." >&2
+          exit 1
+
+      - name: Create PR dev -> main and enable auto merge
+        id: pr_main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          git fetch origin dev --force
+          git fetch origin main --force
+
+          pr_number="$(gh pr list --base main --head dev --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr_number" ]; then
+            pr_url="$(gh pr create --base main --head dev --title "release: ${TAG}" --body "")"
+            pr_number="$(echo "$pr_url" | sed -n 's#.*/pull/##p')"
+          fi
+
+          gh pr merge "$pr_number" --squash --auto --subject "release: ${TAG}" --body ""
+
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for PR merge into main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr_main.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          tries=240
+          while [ "$tries" -gt 0 ]; do
+            state="$(gh pr view "$PR_NUMBER" --json state --jq '.state')"
+            merged="$(gh pr view "$PR_NUMBER" --json merged --jq '.merged')"
+
+            if [ "$merged" = "true" ]; then
+              exit 0
+            fi
+
+            if [ "$state" != "OPEN" ]; then
+              echo "PR is not open and not merged. state=$state" >&2
+              exit 1
+            fi
+
+            sleep 10
+            tries=$((tries-1))
+          done
+
+          echo "Timed out waiting for PR to merge into main." >&2
+          exit 1
 
       - name: Tag main at merged commit and push tag
         shell: bash
