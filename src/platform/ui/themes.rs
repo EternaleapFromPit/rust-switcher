@@ -3,6 +3,11 @@
 //! This module provides theme-aware painting functions for Windows controls
 //! and handles dark/light theme switching.
 //!
+//! Goals:
+//! - strong typing for theme selection
+//! - centralized theme palette
+//! - minimal Win32 glue at the edges
+//! - pure functions for all "decide colors" logic
 use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
@@ -11,9 +16,9 @@ use windows::{
             Gdi::{
                 COLOR_WINDOW, COLOR_WINDOWTEXT, CreateSolidBrush, DT_CENTER, DT_SINGLELINE,
                 DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect, FrameRect,
-                GetStockObject, GetSysColor, GetSysColorBrush, HBRUSH, HDC, HGDIOBJ,
-                InvalidateRect, NULL_BRUSH, RDW_ALLCHILDREN, RDW_INVALIDATE, RedrawWindow,
-                SetBkColor, SetBkMode, SetTextColor, TRANSPARENT, UpdateWindow,
+                GetSysColor, GetSysColorBrush, HBRUSH, HDC, HGDIOBJ, InvalidateRect,
+                RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RedrawWindow, SetBkColor, SetBkMode,
+                SetTextColor, TRANSPARENT, UpdateWindow,
             },
         },
         UI::{
@@ -21,7 +26,7 @@ use windows::{
                 DRAWITEMSTRUCT, ODS_DEFAULT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON,
                 SetWindowTheme,
             },
-            WindowsAndMessaging::{GetClientRect, *},
+            WindowsAndMessaging::{GetClientRect, GetParent, GetWindow, GetWindowLongPtrW, *},
         },
     },
     core::{BOOL, w},
@@ -29,43 +34,163 @@ use windows::{
 
 use crate::platform::win::state::{get_state, with_state_mut_do};
 
-const DARK_WINDOW_BG: COLORREF = COLORREF(0x002D2D30);
-const DARK_CONTROL_BG: COLORREF = COLORREF(0x002D2D30);
-const DARK_EDIT_BG: COLORREF = COLORREF(0x001E1E1E);
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum Theme {
+    Light,
+    Dark,
+}
 
-fn ensure_dark_brushes(hwnd: HWND) {
-    with_state_mut_do(hwnd, |state| unsafe {
+impl Theme {
+    pub fn is_dark(self) -> bool {
+        matches!(self, Theme::Dark)
+    }
+
+    pub fn colors(self) -> &'static ThemeColors {
+        match self {
+            Theme::Light => &THEME_LIGHT,
+            Theme::Dark => &THEME_DARK,
+        }
+    }
+
+    pub fn button_palette(self) -> &'static ButtonPalette {
+        match self {
+            Theme::Light => &BUTTON_LIGHT,
+            Theme::Dark => &BUTTON_DARK,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct ThemeColors {
+    pub window_bg: COLORREF,
+    pub control_bg: COLORREF,
+    pub edit_bg: COLORREF,
+    pub text: COLORREF,
+}
+
+const THEME_DARK: ThemeColors = ThemeColors {
+    window_bg: COLORREF(0x002D2D30),
+    control_bg: COLORREF(0x002D2D30),
+    edit_bg: COLORREF(0x001E1E1E),
+    text: COLORREF(0x00FFFFFF),
+};
+
+const THEME_LIGHT: ThemeColors = ThemeColors {
+    window_bg: COLORREF(0x00FFFFFF),
+    control_bg: COLORREF(0x00FFFFFF),
+    edit_bg: COLORREF(0x00FFFFFF),
+    text: COLORREF(0x00000000),
+};
+
+#[derive(Copy, Clone, Debug)]
+pub struct ButtonPalette {
+    pub bg_normal: COLORREF,
+    pub bg_pressed: COLORREF,
+    pub bg_focused: COLORREF,
+    pub bg_disabled: COLORREF,
+
+    pub text_normal: COLORREF,
+    pub text_disabled: COLORREF,
+
+    pub border_normal: COLORREF,
+    pub border_pressed: COLORREF,
+    pub border_disabled: COLORREF,
+}
+
+const BUTTON_DARK: ButtonPalette = ButtonPalette {
+    bg_normal: COLORREF(0x00262626),
+    bg_pressed: COLORREF(0x003C3C3C),
+    bg_focused: COLORREF(0x00323232),
+    bg_disabled: COLORREF(0x00333333),
+
+    text_normal: COLORREF(0x00FFFFFF),
+    text_disabled: COLORREF(0x00888888),
+
+    border_normal: COLORREF(0x00404040),
+    border_pressed: COLORREF(0x00505050),
+    border_disabled: COLORREF(0x00404040),
+};
+
+const BUTTON_LIGHT: ButtonPalette = ButtonPalette {
+    bg_normal: COLORREF(0x00F0F0F0),
+    bg_pressed: COLORREF(0x00C0C0C0),
+    bg_focused: COLORREF(0x00E0E0E0),
+    bg_disabled: COLORREF(0x00C0C0C0),
+
+    text_normal: COLORREF(0x00000000),
+    text_disabled: COLORREF(0x00808080),
+
+    border_normal: COLORREF(0x00808080),
+    border_pressed: COLORREF(0x00808080),
+    border_disabled: COLORREF(0x00808080),
+};
+
+fn resolve_theme_owner_hwnd(mut hwnd: HWND) -> HWND {
+    for _ in 0..64 {
+        if get_state(hwnd).is_some() {
+            return hwnd;
+        }
+
+        let parent = unsafe { GetParent(hwnd).unwrap_or_default() };
+        if parent.0.is_null() || parent == hwnd {
+            return hwnd;
+        }
+        hwnd = parent;
+    }
+
+    hwnd
+}
+
+fn theme_for_hwnd(hwnd: HWND) -> (Theme, HWND) {
+    let owner = resolve_theme_owner_hwnd(hwnd);
+    let dark = get_state(owner)
+        .map(|s| s.current_theme_dark)
+        .unwrap_or(false);
+
+    let theme = if dark { Theme::Dark } else { Theme::Light };
+    (theme, owner)
+}
+
+fn ensure_dark_brushes(owner: HWND, colors: &ThemeColors) {
+    with_state_mut_do(owner, |state| unsafe {
         if state.dark_brush_window_bg.0.is_null() {
-            state.dark_brush_window_bg = CreateSolidBrush(DARK_WINDOW_BG);
+            state.dark_brush_window_bg = CreateSolidBrush(colors.window_bg);
         }
         if state.dark_brush_control_bg.0.is_null() {
-            state.dark_brush_control_bg = CreateSolidBrush(DARK_CONTROL_BG);
+            state.dark_brush_control_bg = CreateSolidBrush(colors.control_bg);
         }
         if state.dark_brush_edit_bg.0.is_null() {
-            state.dark_brush_edit_bg = CreateSolidBrush(DARK_EDIT_BG);
+            state.dark_brush_edit_bg = CreateSolidBrush(colors.edit_bg);
         }
     });
 }
 
+struct OwnedBrush(HBRUSH);
+
+impl OwnedBrush {
+    fn new(color: COLORREF) -> Self {
+        unsafe { Self(CreateSolidBrush(color)) }
+    }
+
+    fn as_hbrush(&self) -> HBRUSH {
+        self.0
+    }
+}
+
+impl Drop for OwnedBrush {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DeleteObject(HGDIOBJ::from(self.0));
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 struct ButtonState {
     pressed: bool,
     focused: bool,
     defaulted: bool,
     disabled: bool,
-}
-
-struct ButtonPalette {
-    bg_normal: COLORREF,
-    bg_pressed: COLORREF,
-    bg_focused: COLORREF,
-    bg_disabled: COLORREF,
-
-    text_normal: COLORREF,
-    text_disabled: COLORREF,
-
-    border_normal: COLORREF,
-    border_pressed: COLORREF,
-    border_disabled: COLORREF,
 }
 
 fn read_button_state(draw_item: &DRAWITEMSTRUCT) -> ButtonState {
@@ -83,7 +208,10 @@ fn read_button_text(hwnd_btn: HWND) -> ([u16; 256], usize) {
     (buf, len)
 }
 
-fn choose_colors(state: &ButtonState, palette: &ButtonPalette) -> (COLORREF, COLORREF, COLORREF) {
+fn choose_button_colors(
+    state: ButtonState,
+    palette: &ButtonPalette,
+) -> (COLORREF, COLORREF, COLORREF) {
     let bg = if state.disabled {
         palette.bg_disabled
     } else if state.pressed {
@@ -112,18 +240,16 @@ fn choose_colors(state: &ButtonState, palette: &ButtonPalette) -> (COLORREF, COL
 }
 
 fn paint_button_background(hdc: HDC, rect: &RECT, bg: COLORREF) {
+    let brush = OwnedBrush::new(bg);
     unsafe {
-        let brush = CreateSolidBrush(bg);
-        FillRect(hdc, rect, brush);
-        let _ = DeleteObject(HGDIOBJ::from(brush));
+        FillRect(hdc, rect, brush.as_hbrush());
     }
 }
 
 fn paint_button_border(hdc: HDC, rect: &RECT, border: COLORREF) {
+    let brush = OwnedBrush::new(border);
     unsafe {
-        let brush = CreateSolidBrush(border);
-        FrameRect(hdc, rect, brush);
-        let _ = DeleteObject(HGDIOBJ::from(brush));
+        FrameRect(hdc, rect, brush.as_hbrush());
     }
 }
 
@@ -172,11 +298,11 @@ fn paint_button(
     hdc: HDC,
     rect: &RECT,
     hwnd_btn: HWND,
-    state: &ButtonState,
+    state: ButtonState,
     palette: &ButtonPalette,
 ) {
     let (mut text_buf, text_len) = read_button_text(hwnd_btn);
-    let (bg, text, border) = choose_colors(state, palette);
+    let (bg, text, border) = choose_button_colors(state, palette);
 
     paint_button_background(hdc, rect, bg);
 
@@ -195,38 +321,6 @@ fn paint_button(
     );
 }
 
-fn palette_dark() -> ButtonPalette {
-    ButtonPalette {
-        bg_normal: COLORREF(0x00262626),
-        bg_pressed: COLORREF(0x003C3C3C),
-        bg_focused: COLORREF(0x00323232),
-        bg_disabled: COLORREF(0x00333333),
-
-        text_normal: COLORREF(0x00FFFFFF),
-        text_disabled: COLORREF(0x00888888),
-
-        border_normal: COLORREF(0x00404040),
-        border_pressed: COLORREF(0x00505050),
-        border_disabled: COLORREF(0x00404040),
-    }
-}
-
-fn palette_light() -> ButtonPalette {
-    ButtonPalette {
-        bg_normal: COLORREF(0x00F0F0F0),
-        bg_pressed: COLORREF(0x00C0C0C0),
-        bg_focused: COLORREF(0x00E0E0E0),
-        bg_disabled: COLORREF(0x00C0C0C0),
-
-        text_normal: COLORREF(0x00000000),
-        text_disabled: COLORREF(0x00808080),
-
-        border_normal: COLORREF(0x00808080),
-        border_pressed: COLORREF(0x00808080),
-        border_disabled: COLORREF(0x00808080),
-    }
-}
-
 /// Handles `WM_DRAWITEM` messages for owner-drawn buttons.
 pub fn on_draw_item(_hwnd: HWND, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     unsafe {
@@ -241,186 +335,150 @@ pub fn on_draw_item(_hwnd: HWND, _wparam: WPARAM, lparam: LPARAM) -> LRESULT {
             Err(_) => return LRESULT(0),
         };
 
-        let theme_dark = get_state(parent_hwnd)
-            .map(|s| s.current_theme_dark)
-            .unwrap_or(false);
-
-        let palette = if theme_dark {
-            palette_dark()
-        } else {
-            palette_light()
-        };
-
+        let (theme, _owner) = theme_for_hwnd(parent_hwnd);
+        let palette = theme.button_palette();
         let state = read_button_state(draw_item);
 
         paint_button(
             draw_item.hDC,
             &draw_item.rcItem,
             draw_item.hwndItem,
-            &state,
-            &palette,
+            state,
+            palette,
         );
 
         LRESULT(1)
     }
 }
 
-/// Handles `WM_CTLCOLOR*` style messages by configuring the device context and returning a brush.
-/// Expected usage:
-/// - called from a window procedure when processing control color messages
-/// - `wparam` is interpreted as an `HDC` for the control being painted
-///
-/// What it does:
-/// - sets the text color to the system `COLOR_WINDOWTEXT` color
-/// - sets background mode to `TRANSPARENT` so the parent background shows through
-/// - returns a system brush for `COLOR_WINDOW` to paint the control background
-///
-/// Return value:
-/// - `LRESULT` containing an `HBRUSH` handle, as required by `WM_CTLCOLOR*`
-///
-/// Safety:
-/// - this function performs raw handle casts (`WPARAM` to `HDC`) and calls Win32 APIs
-///   that assume a valid device context.
-pub fn on_ctlcolor(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+#[derive(Copy, Clone, Debug)]
+enum ControlRole {
+    Static,
+    Dialog,
+    Edit,
+}
+
+fn is_groupbox(hwnd_ctl: HWND) -> bool {
     unsafe {
-        let hdc = HDC(wparam.0 as *mut core::ffi::c_void);
+        let style = GetWindowLongPtrW(hwnd_ctl, GWL_STYLE) as u32;
+        (style & (BS_GROUPBOX as u32)) != 0
+    }
+}
 
-        if let Some(state) = get_state(hwnd)
-            && state.current_theme_dark
-        {
-            ensure_dark_brushes(hwnd);
+fn apply_dark_ctlcolor(owner: HWND, hdc: HDC, hwnd_ctl: HWND, role: ControlRole) -> HBRUSH {
+    let colors = Theme::Dark.colors();
+    ensure_dark_brushes(owner, colors);
 
-            let hwnd_ctl = HWND(lparam.0 as *mut core::ffi::c_void);
+    unsafe {
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, colors.text);
+    }
 
-            SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, COLORREF(0x00FFFFFF));
+    if is_groupbox(hwnd_ctl) {
+        let Some(state) = get_state(owner) else {
+            return HBRUSH::default();
+        };
 
-            let style = GetWindowLongPtrW(hwnd_ctl, GWL_STYLE) as u32;
-            if (style & (BS_GROUPBOX as u32)) != 0 {
-                let null_brush = GetStockObject(NULL_BRUSH);
-                return LRESULT(null_brush.0 as isize);
-            }
-
-            SetBkColor(hdc, DARK_CONTROL_BG);
-
-            if let Some(state) = get_state(hwnd) {
-                let brush = state.dark_brush_control_bg;
-                return LRESULT(brush.0 as isize);
-            }
-
-            return LRESULT(0);
+        unsafe {
+            SetBkColor(hdc, colors.control_bg);
         }
 
+        return state.dark_brush_control_bg;
+    }
+
+    let bg = match role {
+        ControlRole::Dialog => colors.window_bg,
+        ControlRole::Edit => colors.edit_bg,
+        ControlRole::Static => colors.control_bg,
+    };
+
+    unsafe {
+        SetBkColor(hdc, bg);
+    }
+
+    let Some(state) = get_state(owner) else {
+        return HBRUSH::default();
+    };
+
+    match role {
+        ControlRole::Dialog => state.dark_brush_window_bg,
+        ControlRole::Edit => state.dark_brush_edit_bg,
+        ControlRole::Static => state.dark_brush_control_bg,
+    }
+}
+
+fn apply_light_ctlcolor(hdc: HDC) -> HBRUSH {
+    unsafe {
         SetTextColor(hdc, COLORREF(GetSysColor(COLOR_WINDOWTEXT)));
         SetBkMode(hdc, TRANSPARENT);
-
-        let brush: HBRUSH = GetSysColorBrush(COLOR_WINDOW);
-        LRESULT(brush.0 as isize)
+        GetSysColorBrush(COLOR_WINDOW)
     }
+}
+
+fn ctlcolor(hwnd_any: HWND, wparam: WPARAM, lparam: LPARAM, role: ControlRole) -> LRESULT {
+    let hdc = HDC(wparam.0 as *mut core::ffi::c_void);
+    let hwnd_ctl = HWND(lparam.0 as *mut core::ffi::c_void);
+
+    let (theme, owner) = theme_for_hwnd(hwnd_any);
+
+    let brush = match theme {
+        Theme::Dark => apply_dark_ctlcolor(owner, hdc, hwnd_ctl, role),
+        Theme::Light => apply_light_ctlcolor(hdc),
+    };
+
+    LRESULT(brush.0 as isize)
+}
+
+/// Handles `WM_CTLCOLOR*` style messages by configuring the device context and returning a brush.
+pub fn on_ctlcolor(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    ctlcolor(hwnd, wparam, lparam, ControlRole::Static)
 }
 
 /// Handles `WM_CTLCOLORSTATIC` messages for static controls.
 pub fn on_color_dialog(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd)
-        && state.current_theme_dark
-    {
-        ensure_dark_brushes(hwnd);
-
-        let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
-        unsafe {
-            SetBkMode(hdc, TRANSPARENT);
-            SetBkColor(hdc, DARK_WINDOW_BG);
-            SetTextColor(hdc, COLORREF(0x00FFFFFF));
-        }
-
-        if let Some(state) = get_state(hwnd) {
-            let brush = state.dark_brush_window_bg;
-            return LRESULT(brush.0 as isize);
-        }
-
-        return on_ctlcolor(hwnd, wparam, lparam);
-    }
-
-    on_ctlcolor(hwnd, wparam, lparam)
+    ctlcolor(hwnd, wparam, lparam, ControlRole::Dialog)
 }
 
 /// Handles `WM_CTLCOLORSTATIC` messages for static controls.
-/// Expected usage: called from a window procedure when processing `WM_CTLCOLORSTATIC`
-/// messages.
 pub fn on_color_static(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd)
-        && state.current_theme_dark
-    {
-        ensure_dark_brushes(hwnd);
-
-        let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
-        unsafe {
-            SetBkMode(hdc, TRANSPARENT);
-            SetBkColor(hdc, DARK_CONTROL_BG);
-            SetTextColor(hdc, COLORREF(0x00FFFFFF));
-        }
-
-        if let Some(state) = get_state(hwnd) {
-            let brush = state.dark_brush_control_bg;
-            return LRESULT(brush.0 as isize);
-        }
-
-        return on_ctlcolor(hwnd, wparam, lparam);
-    }
-
-    on_ctlcolor(hwnd, wparam, lparam)
+    ctlcolor(hwnd, wparam, lparam, ControlRole::Static)
 }
 
 /// Handles `WM_CTLCOLOREDIT` messages for edit controls.
 pub fn on_color_edit(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if let Some(state) = get_state(hwnd)
-        && state.current_theme_dark
-    {
-        ensure_dark_brushes(hwnd);
-
-        let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
-        unsafe {
-            SetBkMode(hdc, TRANSPARENT);
-            SetBkColor(hdc, DARK_EDIT_BG);
-            SetTextColor(hdc, COLORREF(0x00FFFFFF));
-        }
-
-        let brush = state.dark_brush_edit_bg;
-        return LRESULT(brush.0 as isize);
-    }
-
-    on_ctlcolor(hwnd, wparam, lparam)
+    ctlcolor(hwnd, wparam, lparam, ControlRole::Edit)
 }
 
 /// Handles `WM_ERASEBKGND` messages for window background erasing.
 pub fn on_erase_background(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-    let Some(state) = get_state(hwnd) else {
-        return LRESULT(0);
-    };
+    let (theme, owner) = theme_for_hwnd(hwnd);
 
-    let hdc = HDC(wparam.0 as *mut std::ffi::c_void);
+    let hdc = HDC(wparam.0 as *mut core::ffi::c_void);
     let mut rect = RECT::default();
 
     unsafe {
         let _ = GetClientRect(hwnd, &mut rect);
+    }
 
-        if state.current_theme_dark {
-            ensure_dark_brushes(hwnd);
+    match theme {
+        Theme::Dark => {
+            let colors = Theme::Dark.colors();
+            ensure_dark_brushes(owner, colors);
 
-            if let Some(state) = get_state(hwnd) {
-                let brush = state.dark_brush_window_bg;
-                FillRect(hdc, &rect, brush);
-                return LRESULT(1);
+            let Some(state) = get_state(owner) else {
+                return LRESULT(0);
+            };
+
+            unsafe {
+                FillRect(hdc, &rect, state.dark_brush_window_bg);
             }
-
-            return LRESULT(0);
+            LRESULT(1)
         }
-
-        let brush = CreateSolidBrush(COLORREF(0x00FFFFFF));
-        FillRect(hdc, &rect, brush);
-        let _ = DeleteObject(HGDIOBJ::from(brush));
-
-        LRESULT(1)
+        Theme::Light => unsafe {
+            let brush = GetSysColorBrush(COLOR_WINDOW);
+            FillRect(hdc, &rect, brush);
+            LRESULT(1)
+        },
     }
 }
 
@@ -428,8 +486,14 @@ pub fn on_erase_background(hwnd: HWND, wparam: WPARAM, _lparam: LPARAM) -> LRESU
 /// Also forces a repaint of the window and its child controls to apply the theme changes.
 pub fn set_window_theme(hwnd_main: HWND, dark: bool) {
     unsafe {
-        let immersive = if dark { BOOL(1) } else { BOOL(0) };
+        let theme = if dark { Theme::Dark } else { Theme::Light };
 
+        // IMPORTANT: update state before anything that might trigger painting
+        with_state_mut_do(hwnd_main, |state| {
+            state.current_theme_dark = theme.is_dark();
+        });
+
+        let immersive = if theme.is_dark() { BOOL(1) } else { BOOL(0) };
         let _ = DwmSetWindowAttribute(
             hwnd_main,
             DWMWA_USE_IMMERSIVE_DARK_MODE,
@@ -437,7 +501,7 @@ pub fn set_window_theme(hwnd_main: HWND, dark: bool) {
             std::mem::size_of::<BOOL>() as u32,
         );
 
-        let class = if dark {
+        let class = if theme.is_dark() {
             w!("DarkMode_Explorer")
         } else {
             w!("Explorer")
@@ -445,22 +509,16 @@ pub fn set_window_theme(hwnd_main: HWND, dark: bool) {
 
         let _ = SetWindowTheme(hwnd_main, class, windows::core::PCWSTR::null());
 
-        // Apply the same theme to child controls, without EnumChildWindows callback
         let mut child = GetWindow(hwnd_main, GW_CHILD).unwrap_or_default();
-
         while !child.0.is_null() {
             let _ = SetWindowTheme(child, class, windows::core::PCWSTR::null());
             child = GetWindow(child, GW_HWNDNEXT).unwrap_or_default();
         }
 
-        with_state_mut_do(hwnd_main, |state| {
-            state.current_theme_dark = dark;
-        });
-
         let _ = InvalidateRect(Some(hwnd_main), None, true);
         let _ = UpdateWindow(hwnd_main);
 
-        let flags = RDW_INVALIDATE | RDW_ALLCHILDREN;
+        let flags = RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN;
         let _ = RedrawWindow(Some(hwnd_main), None, None, flags);
     }
 }

@@ -27,7 +27,7 @@ use windows::{
             DefWindowProcW, FindWindowW, GWLP_USERDATA, GetWindowLongPtrW, IsWindowVisible,
             PostMessageW, PostQuitMessage, RegisterWindowMessageW, SC_CLOSE, SC_MINIMIZE,
             SIZE_MINIMIZED, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, SetForegroundWindow,
-            SetWindowLongPtrW, ShowWindow, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN,
+            SetWindowLongPtrW, ShowWindow, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN,
             WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_HOTKEY, WM_SIZE,
             WM_SYSCOMMAND, WM_TIMER, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
         },
@@ -65,6 +65,8 @@ use crate::{
     ui_call, ui_try,
     utils::helpers,
 };
+
+const WM_APP_APPLY_THEME: u32 = WM_APP + 1;
 
 #[rustfmt::skip]
 #[cfg(debug_assertions)]
@@ -166,8 +168,6 @@ fn apply_config_runtime(
 ) -> windows::core::Result<()> {
     state.autoconvert_enabled = false;
 
-    crate::platform::ui::themes::set_window_theme(hwnd, cfg.theme_dark);
-
     state.active_hotkey_sequences = crate::app::HotkeySequenceValues::from_config(cfg);
 
     state.runtime_chord_capture = crate::app::RuntimeChordCapture::default();
@@ -184,6 +184,25 @@ fn apply_config_runtime(
         "Failed to register hotkeys",
         crate::input::hotkeys::register_from_config(hwnd, cfg)
     );
+
+    // ВАЖНО: зафиксировать тему в state до любых WM_CTLCOLOR*.
+    // А само применение Visual Styles для чекбоксов делать отложенно на старте.
+    let dark = cfg.theme_dark;
+
+    state.current_theme_dark = dark;
+
+    if unsafe { IsWindowVisible(hwnd).as_bool() } {
+        set_window_theme(hwnd, dark);
+    } else {
+        unsafe {
+            let _ = PostMessageW(
+                Some(hwnd),
+                WM_APP_APPLY_THEME,
+                WPARAM(if dark { 1 } else { 0 }),
+                LPARAM(0),
+            );
+        }
+    }
 
     Ok(())
 }
@@ -262,12 +281,8 @@ fn load_config_or_default(hwnd: HWND, state: &mut AppState) -> config::Config {
 fn on_create(hwnd: HWND) -> LRESULT {
     let mut state = Box::new(AppState::default());
 
-    #[rustfmt::skip]
-    startup_or_return0!(hwnd, &mut state, "Failed to create UI controls", ui::create_controls(hwnd, &mut state));
-    let cfg = load_config_or_default(hwnd, state.as_mut());
-
     // ВАЖНО: state должен быть доступен через get_state/with_state_mut_do
-    // до применения темы и любых WM_CTLCOLOR* обработчиков.
+    // уже во время создания контролов и их первого paint.
     unsafe {
         SetWindowLongPtrW(
             hwnd,
@@ -275,6 +290,10 @@ fn on_create(hwnd: HWND) -> LRESULT {
             state.as_mut() as *mut AppState as isize,
         );
     }
+
+    #[rustfmt::skip]
+    startup_or_return0!(hwnd, &mut state, "Failed to create UI controls", ui::create_controls(hwnd, &mut state));
+    let cfg = load_config_or_default(hwnd, state.as_mut());
 
     state.hotkey_values = crate::app::HotkeyValues::from_config(&cfg);
     state.active_hotkey_sequences = crate::app::HotkeySequenceValues::from_config(&cfg);
@@ -373,6 +392,12 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
 
         //For buttons
         WM_DRAWITEM => on_draw_item(hwnd, wparam, lparam),
+        WM_APP_APPLY_THEME => {
+            let dark = wparam.0 != 0;
+            set_window_theme(hwnd, dark);
+            LRESULT(0)
+        }
+
         WM_CTLCOLORBTN => on_ctlcolor(hwnd, wparam, lparam),
         WM_SIZE => {
             if wparam.0 == SIZE_MINIMIZED as usize {
