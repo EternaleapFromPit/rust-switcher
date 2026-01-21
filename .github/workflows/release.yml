@@ -31,6 +31,10 @@ jobs:
     name: "Step 1 - bump via PR to dev, squash merge to main, tag main"
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+      pull-requests: write
+
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -202,11 +206,12 @@ jobs:
 
       - name: Push bump branch
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          git push -u origin "${STEPS_BUMP_BRANCH_OUTPUTS_BRANCH}"
-        env:
-          STEPS_BUMP_BRANCH_OUTPUTS_BRANCH: ${{ steps.bump_branch.outputs.branch }}
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+          git push -u origin "${{ steps.bump_branch.outputs.branch }}"
 
       - name: Create PR to dev and enable auto merge
         id: pr_dev
