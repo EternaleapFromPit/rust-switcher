@@ -29,8 +29,8 @@ use windows::{
             PostMessageW, PostQuitMessage, RegisterWindowMessageW, SC_CLOSE, SC_MINIMIZE,
             SIZE_MINIMIZED, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWNORMAL, SetForegroundWindow,
             SetWindowLongPtrW, ShowWindow, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORBTN,
-            WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_HOTKEY, WM_SIZE,
-            WM_SYSCOMMAND, WM_TIMER, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
+            WM_CTLCOLORDLG, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DRAWITEM, WM_HOTKEY, WM_PAINT,
+            WM_SIZE, WM_SYSCOMMAND, WM_TIMER, WS_MAXIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_THICKFRAME,
         },
     },
     core::{PCWSTR, Result, w},
@@ -400,6 +400,7 @@ pub extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         WM_COMMAND => commands::on_command(hwnd, wparam),
         WM_HOTKEY => on_hotkey(hwnd, wparam),
         WM_TIMER => on_timer(hwnd, wparam, lparam),
+        WM_PAINT => crate::platform::ui::themes::on_paint(hwnd, wparam, lparam),
 
         //Purpose: Customize the background color of a dialog box itself.
         //When sent: When the dialog box background is about to be painted.

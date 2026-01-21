@@ -9,9 +9,9 @@ use windows::{
         Foundation::{HWND, RECT},
         System::SystemServices::SS_RIGHT,
         UI::WindowsAndMessaging::{
-            BS_AUTOCHECKBOX, BS_GROUPBOX, BS_OWNERDRAW, CreateWindowExW, ES_NUMBER, ES_READONLY,
-            GetClientRect, SetWindowTextW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD,
-            WS_EX_CLIENTEDGE, WS_TABSTOP, WS_VISIBLE,
+            BS_AUTOCHECKBOX, BS_OWNERDRAW, CreateWindowExW, ES_NUMBER, ES_READONLY, GetClientRect,
+            SetWindowTextW, WINDOW_EX_STYLE, WINDOW_STYLE, WS_CHILD, WS_EX_CLIENTEDGE, WS_TABSTOP,
+            WS_VISIBLE,
         },
     },
     core::{PCWSTR, w},
@@ -167,17 +167,17 @@ fn create_settings_group(
     let left_x = l.left_x;
     let top_y = l.top_y;
 
-    let _grp_settings = create(
-        hwnd,
-        ControlSpec {
-            ex_style: WINDOW_EX_STYLE(0),
-            class: w!("BUTTON"),
-            text: w!("Settings"),
-            style: ws_i32(WS_CHILD | WS_VISIBLE, BS_GROUPBOX),
-            rect: RectI::new(left_x, top_y, l.group_w_left, l.group_h),
-            menu: None,
-        },
-    )?;
+    // let _grp_settings = create(
+    //     hwnd,
+    //     ControlSpec {
+    //         ex_style: WINDOW_EX_STYLE(0),
+    //         class: w!("BUTTON"),
+    //         text: w!("Settings"),
+    //         style: ws_i32(WS_CHILD | WS_VISIBLE, BS_GROUPBOX),
+    //         rect: RectI::new(left_x, top_y, l.group_w_left, l.group_h),
+    //         menu: None,
+    //     },
+    // )?;
 
     state.checkboxes.autostart = create(
         hwnd,
@@ -261,7 +261,6 @@ fn create_hotkeys_group(
 ) -> windows::core::Result<()> {
     let root = HotkeysGroupLayout::new(l);
 
-    create_hotkeys_groupbox(hwnd, &root)?;
     create_hotkey_rows(hwnd, state, &root)?;
 
     Ok(())
@@ -269,10 +268,6 @@ fn create_hotkeys_group(
 
 #[derive(Clone, Copy)]
 struct HotkeysGroupLayout {
-    top_y: i32,
-    right_x: i32,
-    group_w: i32,
-    group_h: i32,
     hx: i32,
     hy0: i32,
     w_label: i32,
@@ -285,7 +280,6 @@ impl HotkeysGroupLayout {
         let top_y = l.top_y;
 
         let group_w = l.group_w_right;
-        let group_h = l.group_h;
 
         let hx = right_x + 12;
         let hy0 = top_y + 28;
@@ -294,10 +288,6 @@ impl HotkeysGroupLayout {
         let w_edit = group_w - 12 - 12 - w_label - 8;
 
         Self {
-            top_y,
-            right_x,
-            group_w,
-            group_h,
             hx,
             hy0,
             w_label,
@@ -306,20 +296,20 @@ impl HotkeysGroupLayout {
     }
 }
 
-fn create_hotkeys_groupbox(hwnd: HWND, g: &HotkeysGroupLayout) -> windows::core::Result<()> {
-    let _ = create(
-        hwnd,
-        ControlSpec {
-            ex_style: WINDOW_EX_STYLE(0),
-            class: w!("BUTTON"),
-            text: w!("Hotkeys"),
-            style: ws_i32(WS_CHILD | WS_VISIBLE, BS_GROUPBOX),
-            rect: RectI::new(g.right_x, g.top_y, g.group_w, g.group_h),
-            menu: None,
-        },
-    )?;
-    Ok(())
-}
+// fn create_hotkeys_groupbox(hwnd: HWND, g: &HotkeysGroupLayout) -> windows::core::Result<()> {
+//     // let _ = create(
+//     //     hwnd,
+//     //     ControlSpec {
+//     //         ex_style: WINDOW_EX_STYLE(0),
+//     //         class: w!("BUTTON"),
+//     //         text: w!("Hotkeys"),
+//     //         style: ws_i32(WS_CHILD | WS_VISIBLE, BS_GROUPBOX),
+//     //         rect: RectI::new(g.right_x, g.top_y, g.group_w, g.group_h),
+//     //         menu: None,
+//     //     },
+//     // )?;
+//     Ok(())
+// }
 
 fn create_hotkey_rows(
     hwnd: HWND,

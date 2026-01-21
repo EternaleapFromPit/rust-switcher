@@ -14,11 +14,12 @@ use windows::{
         Graphics::{
             Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute},
             Gdi::{
-                COLOR_WINDOW, COLOR_WINDOWTEXT, CreateSolidBrush, DT_CENTER, DT_SINGLELINE,
-                DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, FillRect, FrameRect,
-                GetSysColor, GetSysColorBrush, HBRUSH, HDC, HGDIOBJ, InvalidateRect,
-                RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RedrawWindow, SetBkColor, SetBkMode,
-                SetTextColor, TRANSPARENT, UpdateWindow,
+                BeginPaint, COLOR_WINDOW, COLOR_WINDOWTEXT, CreateSolidBrush, DEFAULT_GUI_FONT,
+                DT_CALCRECT, DT_CENTER, DT_LEFT, DT_SINGLELINE, DT_VCENTER, DeleteObject,
+                DrawFocusRect, DrawTextW, EndPaint, FillRect, FrameRect, GetStockObject,
+                GetSysColor, GetSysColorBrush, HBRUSH, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT,
+                RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RedrawWindow, SelectObject, SetBkColor,
+                SetBkMode, SetTextColor, TRANSPARENT, UpdateWindow,
             },
         },
         UI::{
@@ -32,7 +33,10 @@ use windows::{
     core::{BOOL, w},
 };
 
-use crate::platform::win::state::{get_state, with_state_mut_do};
+use crate::platform::{
+    ui::geom::{Layout, RectI},
+    win::state::{get_state, with_state_mut_do},
+};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Theme {
@@ -59,6 +63,8 @@ impl Theme {
         }
     }
 }
+
+const ACCENT_CORAL: COLORREF = COLORREF(0x000048F0);
 
 #[derive(Copy, Clone, Debug)]
 pub struct ThemeColors {
@@ -364,6 +370,111 @@ fn is_groupbox(hwnd_ctl: HWND) -> bool {
     unsafe {
         let style = GetWindowLongPtrW(hwnd_ctl, GWL_STYLE) as u32;
         (style & BS_TYPEMASK_U32) == (BS_GROUPBOX as u32)
+    }
+}
+
+fn recti_to_rect(r: RectI) -> RECT {
+    RECT {
+        left: r.x,
+        top: r.y,
+        right: r.x + r.w,
+        bottom: r.y + r.h,
+    }
+}
+
+fn paint_group_frame(
+    hdc: HDC,
+    r: RectI,
+    title: &str,
+    text_color: COLORREF,
+    border_color: COLORREF,
+    background_color: COLORREF,
+) {
+    let outer = recti_to_rect(r);
+
+    let border_brush = OwnedBrush::new(border_color);
+    let bg_brush = OwnedBrush::new(background_color);
+
+    unsafe {
+        FrameRect(hdc, &outer, border_brush.as_hbrush());
+
+        let old_font: HGDIOBJ = SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+
+        SetTextColor(hdc, text_color);
+        SetBkMode(hdc, TRANSPARENT);
+
+        let mut title_buf: Vec<u16> = title.encode_utf16().collect();
+
+        let mut measure = RECT::default();
+        let _ = DrawTextW(
+            hdc,
+            &mut title_buf,
+            &mut measure,
+            DT_LEFT | DT_SINGLELINE | DT_CALCRECT,
+        );
+
+        // Затираем кусок рамки под заголовком фоном окна
+        let text_w = measure.right - measure.left;
+        let text_h = measure.bottom - measure.top;
+
+        let pad_left = 12;
+        let pad_right = 6;
+
+        let mut cap = RECT {
+            left: r.x + pad_left,
+            top: r.y,
+            right: r.x + pad_left + text_w + pad_right,
+            bottom: r.y + text_h,
+        };
+
+        FillRect(hdc, &cap, bg_brush.as_hbrush());
+
+        // Рисуем заголовок
+        DrawTextW(hdc, &mut title_buf, &mut cap, DT_LEFT | DT_SINGLELINE);
+
+        let _ = SelectObject(hdc, old_font);
+    }
+}
+
+pub fn on_paint(hwnd: HWND, _wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
+    unsafe {
+        let mut ps = PAINTSTRUCT::default();
+        let hdc = BeginPaint(hwnd, &mut ps);
+
+        let mut rc = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rc);
+        let client_w = rc.right - rc.left;
+
+        let l = Layout::new(client_w);
+
+        let (theme, _owner) = theme_for_hwnd(hwnd);
+        let colors = theme.colors();
+
+        let border = ACCENT_CORAL;
+
+        let settings_rect = RectI::new(l.left_x(), l.top_y(), l.group_w_left(), l.group_h());
+        let hotkeys_rect = RectI::new(l.right_x(), l.top_y(), l.group_w_right(), l.group_h());
+
+        paint_group_frame(
+            hdc,
+            settings_rect,
+            "Settings",
+            colors.text,
+            border,
+            colors.window_bg,
+        );
+
+        paint_group_frame(
+            hdc,
+            hotkeys_rect,
+            "Hotkeys",
+            colors.text,
+            border,
+            colors.window_bg,
+        );
+
+        let _ = EndPaint(hwnd, &ps);
+        LRESULT(0)
     }
 }
 
