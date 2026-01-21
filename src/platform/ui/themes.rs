@@ -372,8 +372,16 @@ fn apply_dark_ctlcolor(owner: HWND, hdc: HDC, hwnd_ctl: HWND, role: ControlRole)
     ensure_dark_brushes(owner, colors);
 
     unsafe {
-        SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, colors.text);
+    }
+
+    match role {
+        ControlRole::Edit => unsafe {
+            SetBkMode(hdc, windows::Win32::Graphics::Gdi::OPAQUE);
+        },
+        _ => unsafe {
+            SetBkMode(hdc, TRANSPARENT);
+        },
     }
 
     if is_groupbox(hwnd_ctl) {
