@@ -76,6 +76,32 @@ fn set_hwnd_text(hwnd: HWND, s: &str) -> windows::core::Result<()> {
     helpers::set_edit_text(hwnd, s)
 }
 
+pub(crate) fn apply_theme_from_tray(hwnd: HWND, dark: bool) {
+    // Apply visuals immediately.
+    crate::platform::ui::themes::set_window_theme(hwnd, dark);
+
+    // Keep the main window checkbox state in sync, so Apply does not revert it.
+    with_state_mut_do(hwnd, |state| {
+        helpers::set_checkbox(state.checkboxes.theme_dark, dark);
+    });
+
+    // Persist only this setting, do not overwrite other pending UI edits.
+    let mut cfg = config::load().unwrap_or_default();
+    cfg.theme_dark = dark;
+
+    if let Err(e) = config::save(&cfg) {
+        with_state_mut_do(hwnd, |state| {
+            crate::platform::ui::error_notifier::push(
+                hwnd,
+                state,
+                T_CONFIG,
+                "Failed to save config",
+                &io_to_win(e),
+            );
+        });
+    }
+}
+
 pub fn refresh_autostart_checkbox(state: &mut AppState) -> windows::core::Result<()> {
     let enabled = crate::platform::win::autostart::is_enabled()?;
     crate::utils::helpers::set_checkbox(state.checkboxes.autostart, enabled);
