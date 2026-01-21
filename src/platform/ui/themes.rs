@@ -71,7 +71,7 @@ pub struct ThemeColors {
 const THEME_DARK: ThemeColors = ThemeColors {
     window_bg: COLORREF(0x002D2D30),
     control_bg: COLORREF(0x002D2D30),
-    edit_bg: COLORREF(0x001E1E1E),
+    edit_bg: COLORREF(0x002D2D30),
     text: COLORREF(0x00FFFFFF),
 };
 
@@ -359,9 +359,11 @@ enum ControlRole {
 }
 
 fn is_groupbox(hwnd_ctl: HWND) -> bool {
+    const BS_TYPEMASK_U32: u32 = 0x0000000F;
+
     unsafe {
         let style = GetWindowLongPtrW(hwnd_ctl, GWL_STYLE) as u32;
-        (style & (BS_GROUPBOX as u32)) != 0
+        (style & BS_TYPEMASK_U32) == (BS_GROUPBOX as u32)
     }
 }
 
