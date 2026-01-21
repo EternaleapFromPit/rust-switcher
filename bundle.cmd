@@ -17,8 +17,8 @@ if "%GIT_SHA%"=="" set "GIT_SHA=unknown"
 
 for /f "usebackq delims=" %%T in (`powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd-HHmm'"`) do set "TS=%%T"
 
-rem Output name: policy-router-rs-gpt-YYYY-MM-DD-HHMM-<sha>.zip
-set "OUT_NAME=policy-router-rs-gpt-%TS%-%GIT_SHA%.zip"
+rem Output name: rust-switcher-YYYY-MM-DD-HHMM-<sha>.zip
+set "OUT_NAME=rust-switcher-%TS%-%GIT_SHA%.zip"
 
 if exist "%OUT_NAME%" del /f /q "%OUT_NAME%" >nul 2>&1
 
